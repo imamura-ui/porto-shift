@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Porto シフト管理</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; background: #f5f3ef; }
+input, button, textarea { font-family: inherit; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect } = React;
+const WEEK = ['日','月','火','水','木','金','土'];
+const STORES = {
+  porto: { label:'Porto', accent:'#b5956a', al:'#f0e6d6', staff:['今村','西平 樹里','高須','内藤','深谷','村井','増田','森','西平 未来'] },
+  tete:  { label:'tete',  accent:'#6a8fb5', al:'#dde8f5', staff:['増田','伏見','山口','内藤'] }
+};
+const ALL_STAFF = [...new Set([...STORES.porto.staff, ...STORES.tete.staff])];
+
+function dim(y,m){ return new Date(y,m,0).getDate(); }
+function dow(y,m,d){ return new Date(y,m-1,d).getDay(); }
+function isDark(y,m,d){ return dow(y,m,d)===0||(y===2026&&m===5&&[3,4,5,6].includes(d)); }
+function isSat(y,m,d){ return dow(y,m,d)===6; }
+function cellBg(y,m,d,status,rowBg){
+  if(status==='work') return '#e8f2ef';
+  if(status==='off')  return '#fdecea';
+  if(isDark(y,m,d))  return '#fdf0e8';
+  if(isSat(y,m,d))   return '#eef0fd';
+  return rowBg;
+}
+
+const C = {
+  btn:(bg,c='#fff',ex={})=>({padding:'8px 16px',borderRadius:8,border:'none',background:bg,color:c,fontWeight:600,cursor:'pointer',fontFamily:'inherit',fontSize:13,...ex}),
+  card:(ex={})=>({background:'#fff',borderRadius:12,boxShadow:'0 2px 10px rgba(0,0,0,0.07)',...ex}),
+  inp:(ex={})=>({padding:'8px 10px',border:'1px solid #ddd',borderRadius:8,fontSize:13,fontFamily:'inherit',outline:'none',width:'100%',boxSizing:'border-box',...ex}),
+};
+
+function App() {
+  const [screen, setScreen]   = useState('top'); // top|admin|staff|view
+  const [who, setWho]         = useState('');
+  const [shifts, setShifts]   = useState({});    // {`st-y-m`: {name:{day:{s,t}}}}
+  const [reqs, setReqs]       = useState({});    // {id: req}
+  const [ready, setReady]     = useState(false);
+
+  // ── load ──
+  useEffect(() => {
+    (async () => {
+      try {
+        const sr = localStorage.getItem('porto_shifts');
+        const rr = localStorage.getItem('porto_reqs');
+        if(sr) setShifts(JSON.parse(sr));
+        if(rr) setReqs(JSON.parse(rr));
+      } catch(e){}
+      setReady(true);
+    })();
+  }, []);
+
+  const saveShifts = async (next) => { setShifts(next); try{ localStorage.setItem('porto_shifts', JSON.stringify(next)); }catch{} };
+  const saveReqs   = async (next) => { setReqs(next);   try{ localStorage.setItem('porto_reqs', JSON.stringify(next)); }catch{} };
+
+  const getSD = (st,y,m) => {
+    const k=`${st}-${y}-${m}`;
+    const base = shifts[k] || {};
+    const d = {};
+    STORES[st].staff.forEach(s=>{ d[s] = base[s]||{}; });
+    return d;
+  };
+
+  if(!ready) return (
+    <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',fontFamily:'sans-serif',color:'#aaa'}}>
+      <div style={{textAlign:'center'}}><div style={{fontSize:28,marginBottom:8}}>◌</div><div>読み込み中...</div></div>
+    </div>
+  );
+
+  if(screen==='admin') return <Admin shifts={shifts} reqs={reqs} getSD={getSD} saveShifts={saveShifts} saveReqs={saveReqs} back={()=>setScreen('top')}/>;
+  if(screen==='staff') return <Staff who={who} shifts={shifts} getSD={getSD} reqs={reqs} saveReqs={saveReqs} back={()=>setScreen('top')}/>;
+  if(screen==='view')  return <View getSD={getSD} back={()=>setScreen('top')}/>;
+
+  // ── TOP ──
+  const [nm, setNm] = [who, setWho];
+  return (
+    <div style={{minHeight:'100vh',background:'#f5f3ef',display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'"Noto Sans JP",sans-serif',padding:20}}>
+      <div style={{width:'100%',maxWidth:380}}>
+        <div style={{textAlign:'center',marginBottom:32}}>
+          <div style={{fontFamily:'Georgia,serif',fontSize:34,color:'#b5956a',marginBottom:4}}>Porto</div>
+          <div style={{fontSize:12,color:'#aaa',letterSpacing:'0.15em'}}>シフト管理システム</div>
+        </div>
+        <TopCard icon="👑" title="管理者（今村さん）" sub="シフト確認・編集・申請承認" color="#b5956a" bg="#f0e6d6" onClick={()=>setScreen('admin')}/>
+        <TopCard icon="📋" title="シフト確認" sub="全員のシフト一覧を見る" color="#6a8fb5" bg="#dde8f5" onClick={()=>setScreen('view')}/>
+        <div style={{...C.card({padding:22})}}>
+          <div style={{display:'flex',alignItems:'center',gap:14,marginBottom:14}}>
+            <div style={{width:44,height:44,borderRadius:12,background:'#e8f2ef',display:'flex',alignItems:'center',justifyContent:'center',fontSize:22}}>✋</div>
+            <div><div style={{fontWeight:700,fontSize:15,marginBottom:2}}>スタッフ</div><div style={{fontSize:12,color:'#999'}}>シフト希望を申請する</div></div>
+          </div>
+          <NamePicker value={nm} onChange={setWho}/>
+          {nm && <button onClick={()=>setScreen('staff')} style={{...C.btn('#6a8fb5'),width:'100%',marginTop:10,padding:'10px',fontSize:14}}>{nm} さんで申請する →</button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TopCard({icon,title,sub,color,bg,onClick}){
+  const [hov,setHov]=useState(false);
+  return(
+    <div style={{...C.card({padding:22,marginBottom:12,cursor:'pointer',border:`2px solid ${hov?color:'transparent'}`,transition:'border-color 0.2s'})}}
+      onClick={onClick} onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}>
+      <div style={{display:'flex',alignItems:'center',gap:14}}>
+        <div style={{width:44,height:44,borderRadius:12,background:bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:22}}>{icon}</div>
+        <div><div style={{fontWeight:700,fontSize:15,marginBottom:2}}>{title}</div><div style={{fontSize:12,color:'#999'}}>{sub}</div></div>
+      </div>
+    </div>
+  );
+}
+
+function NamePicker({value,onChange}){
+  const [open,setOpen]=useState(false);
+  return(
+    <div style={{position:'relative'}}>
+      <input value={value} readOnly onClick={()=>setOpen(v=>!v)} placeholder="名前を選んでください" style={{...C.inp({cursor:'pointer'})}}/>
+      {open&&(
+        <div style={{position:'absolute',top:'100%',left:0,right:0,background:'#fff',border:'1px solid #ddd',borderRadius:8,boxShadow:'0 4px 16px rgba(0,0,0,0.12)',zIndex:20,marginTop:4,maxHeight:180,overflowY:'auto'}}>
+          {ALL_STAFF.map(n=>(
+            <div key={n} onClick={()=>{onChange(n);setOpen(false);}} style={{padding:'10px 14px',fontSize:13,cursor:'pointer',borderBottom:'1px solid #f0f0f0'}}
+              onMouseEnter={e=>e.currentTarget.style.background='#f5f3ef'}
+              onMouseLeave={e=>e.currentTarget.style.background='#fff'}>{n}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════
+// ADMIN
+// ══════════════════════════════════════════════
+function Admin({shifts,reqs,getSD,saveShifts,saveReqs,back}){
+  const [st,setSt]=useState('porto');
+  const [y,setY]=useState(2026);
+  const [m,setM]=useState(5);
+  const [tab,setTab]=useState('shift');
+  const [modal,setModal]=useState(null); // {name,day}
+  const [es,setEs]=useState('');
+  const [et1,setEt1]=useState('');
+  const [et2,setEt2]=useState('');
+  const [saving,setSaving]=useState(false);
+
+  const store=STORES[st];
+  const days=dim(y,m);
+  const data=getSD(st,y,m);
+  const pending=Object.entries(reqs).filter(([,r])=>!r.approved&&!r.changeRequested);
+  const changed=Object.entries(reqs).filter(([,r])=>r.changeRequested);
+  const done=Object.entries(reqs).filter(([,r])=>r.approved);
+
+  const openModal=(name,day)=>{
+    const c=data[name]?.[day]||{};
+    setEs(c.s||'');setEt1(c.t?c.t.split('-')[0]:'');setEt2(c.t?(c.t.split('-')[1]||''):'');
+    setModal({name,day});
+  };
+  const saveCell=async()=>{
+    setSaving(true);
+    const t=(et1&&et2)?`${et1}-${et2}`:(et1||'');
+    const k=`${st}-${y}-${m}`;
+    const cur=shifts[k]||{};
+    const nameData={...(cur[modal.name]||{})};
+    if(!es) delete nameData[modal.day]; else nameData[modal.day]={s:es,t};
+    const next={...shifts,[k]:{...cur,[modal.name]:nameData}};
+    await saveShifts(next);
+    setSaving(false);setModal(null);
+  };
+  const approve=async(id)=>{
+    const req=reqs[id];if(!req)return;
+    const k=`${req.store}-${y}-${m}`;
+    const cur=shifts[k]||{};
+    const nameData={...(cur[req.name]||{})};
+    nameData[req.day]={s:req.s,t:req.t||''};
+    await saveShifts({...shifts,[k]:{...cur,[req.name]:nameData}});
+    await saveReqs({...reqs,[id]:{...req,approved:true}});
+  };
+  const reqChange=async(id,memo)=>{
+    await saveReqs({...reqs,[id]:{...reqs[id],changeRequested:true,changeMemo:memo}});
+  };
+
+  const Header=()=>(
+    <div style={{background:'#fff',borderBottom:'1px solid #e0dbd4',padding:'10px 14px',position:'sticky',top:0,zIndex:100,boxShadow:'0 2px 8px rgba(0,0,0,0.06)'}}>
+      <div style={{maxWidth:1400,margin:'0 auto',display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',justifyContent:'space-between'}}>
+        <span style={{fontFamily:'Georgia,serif',fontSize:17,color:store.accent}}>{store.label} <span style={{fontFamily:'inherit',fontSize:10,color:'#aaa'}}>管理者</span></span>
+        <div style={{display:'flex',gap:5}}>
+          {Object.entries(STORES).map(([k,s])=><button key={k} onClick={()=>setSt(k)} style={{...C.btn(st===k?s.accent:'#f0ede8',st===k?'#fff':'#888'),fontSize:12,padding:'5px 13px'}}>{s.label}</button>)}
+        </div>
+        <div style={{display:'flex',gap:5}}>
+          <button onClick={()=>setTab('shift')} style={{...C.btn(tab==='shift'?store.accent:'#f0ede8',tab==='shift'?'#fff':'#888'),fontSize:12,padding:'5px 13px'}}>シフト表</button>
+          <button onClick={()=>setTab('req')} style={{...C.btn(tab==='req'?store.accent:'#f0ede8',tab==='req'?'#fff':'#888'),fontSize:12,padding:'5px 13px',position:'relative'}}>
+            申請一覧{pending.length>0&&<span style={{position:'absolute',top:-5,right:-5,background:'#e74c3c',color:'#fff',borderRadius:'50%',width:16,height:16,fontSize:9,display:'flex',alignItems:'center',justifyContent:'center'}}>{pending.length}</span>}
+          </button>
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:6}}>
+          <button onClick={()=>{if(m===1){setM(12);setY(p=>p-1);}else setM(p=>p-1);}} style={{width:26,height:26,borderRadius:'50%',border:'1px solid #ddd',background:'#fff',cursor:'pointer'}}>‹</button>
+          <span style={{fontSize:13,fontWeight:600,minWidth:96,textAlign:'center'}}>令和{y-2018}年 {m}月</span>
+          <button onClick={()=>{if(m===12){setM(1);setY(p=>p+1);}else setM(p=>p+1);}} style={{width:26,height:26,borderRadius:'50%',border:'1px solid #ddd',background:'#fff',cursor:'pointer'}}>›</button>
+        </div>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          <span style={{fontSize:11,color:saving?store.accent:'#bbb'}}>{saving?'保存中…':'✓ 保存済み'}</span>
+          <button onClick={back} style={{...C.btn('#f0ede8','#888'),fontSize:11,padding:'5px 10px'}}>← 戻る</button>
+        </div>
+      </div>
+    </div>
+  );
+
+  return(
+    <div style={{minHeight:'100vh',background:'#f5f3ef',fontFamily:'"Noto Sans JP",sans-serif'}}>
+      <Header/>
+      <div style={{maxWidth:1400,margin:'0 auto',padding:'12px 14px'}}>
+
+        {tab==='shift'&&(
+          <div style={{...C.card({overflow:'auto'})}}>
+            <table style={{width:'100%',borderCollapse:'collapse',minWidth:800}}>
+              <thead><tr>
+                <th style={{background:'#1a1a1a',color:'#fff',padding:'8px 12px',fontSize:12,width:80,minWidth:80,position:'sticky',left:0,zIndex:10,textAlign:'left'}}>氏名</th>
+                {Array.from({length:days},(_,i)=>i+1).map(d=>(
+                  <th key={d} style={{background:isDark(y,m,d)?'#7a3030':isSat(y,m,d)?'#2a4a7a':'#1a1a1a',color:'#fff',padding:'3px 1px',width:30,minWidth:30}}>
+                    <div style={{fontSize:11,fontWeight:700}}>{d}</div>
+                    <div style={{fontSize:8,opacity:0.6}}>{WEEK[dow(y,m,d)]}</div>
+                  </th>
+                ))}
+                <th style={{background:'#1a1a1a',color:'#fff',fontSize:10,width:34,padding:'3px'}}>日数</th>
+              </tr></thead>
+              <tbody>
+                {store.staff.map((name,ri)=>{
+                  let wk=0; const rb=ri%2===0?'#fff':'#fafaf8';
+                  const mp=pending.filter(([,r])=>r.name===name&&r.store===st);
+                  return(
+                    <tr key={name}>
+                      <td style={{background:rb,padding:'7px 10px',fontSize:13,fontWeight:600,position:'sticky',left:0,zIndex:5,borderRight:'2px solid #e0dbd4',whiteSpace:'nowrap'}}>
+                        {name}{mp.length>0&&<span style={{marginLeft:4,fontSize:8,background:'#e74c3c',color:'#fff',borderRadius:8,padding:'1px 4px'}}>申請{mp.length}</span>}
+                      </td>
+                      {Array.from({length:days},(_,i)=>i+1).map(d=>{
+                        const cell=data[name]?.[d];
+                        const hp=pending.some(([,r])=>r.name===name&&r.day===d&&r.store===st);
+                        if(cell?.s==='work') wk++;
+                        return(
+                          <td key={d} onClick={()=>openModal(name,d)}
+                            style={{background:cellBg(y,m,d,cell?.s,rb),padding:1,height:46,verticalAlign:'middle',border:'1px solid #e8e4de',cursor:'pointer',outline:hp?'2px solid #e74c3c':'none',outlineOffset:'-2px',position:'relative'}}
+                            onMouseEnter={e=>e.currentTarget.style.filter='brightness(0.92)'}
+                            onMouseLeave={e=>e.currentTarget.style.filter=''}>
+                            <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',height:'100%'}}>
+                              {cell?.s==='work'&&<><span style={{fontSize:14,fontWeight:700,color:'#3d6b5e',lineHeight:1}}>○</span>{cell.t&&<span style={{fontSize:7,color:'#777'}}>{cell.t}</span>}</>}
+                              {cell?.s==='off'&&<span style={{fontSize:14,fontWeight:700,color:'#c0392b'}}>×</span>}
+                              {!cell&&<span style={{color:'#ddd',fontSize:13}}>·</span>}
+                              {hp&&<span style={{position:'absolute',top:2,right:2,width:5,height:5,background:'#e74c3c',borderRadius:'50%'}}/>}
+                            </div>
+                          </td>
+                        );
+                      })}
+                      <td style={{fontWeight:700,fontSize:12,color:store.accent,background:'#faf8f5',textAlign:'center',border:'1px solid #e8e4de'}}>{wk||'—'}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {tab==='req'&&(
+          <div>
+            <div style={{fontWeight:700,fontSize:14,marginBottom:14}}>スタッフからの希望申請</div>
+            {pending.length===0&&changed.length===0&&done.length===0&&(
+              <div style={{...C.card({padding:40,textAlign:'center',color:'#bbb',fontSize:14})}}>申請はまだありません</div>
+            )}
+            {pending.length>0&&<>
+              <div style={{fontSize:12,fontWeight:700,color:'#e74c3c',marginBottom:8}}>未承認 ({pending.length}件)</div>
+              {pending.map(([id,r])=><ReqCard key={id} r={r} m={m} y={y} onApprove={()=>approve(id)} onChange={memo=>reqChange(id,memo)}/>)}
+            </>}
+            {changed.length>0&&<>
+              <div style={{fontSize:12,fontWeight:700,color:'#f39c12',marginBottom:8,marginTop:16}}>変更依頼済み ({changed.length}件)</div>
+              {changed.map(([id,r])=><ReqCard key={id} r={r} m={m} y={y} onApprove={()=>approve(id)} onChange={memo=>reqChange(id,memo)}/>)}
+            </>}
+            {done.length>0&&<>
+              <div style={{fontSize:12,fontWeight:700,color:'#3d6b5e',marginBottom:8,marginTop:16}}>承認済み ({done.length}件)</div>
+              {done.map(([id,r])=>(
+                <div key={id} style={{...C.card({padding:'10px 14px',display:'flex',gap:10,alignItems:'center',flexWrap:'wrap',borderLeft:'3px solid #3d6b5e',marginBottom:6,opacity:0.7})}}>
+                  <b style={{fontSize:13}}>{r.name}</b>
+                  <span style={{fontSize:11,background:STORES[r.store].al,color:STORES[r.store].accent,borderRadius:8,padding:'1px 7px'}}>{STORES[r.store].label}</span>
+                  <span style={{fontSize:12}}>{m}月{r.day}日</span>
+                  <span style={{fontSize:13,fontWeight:700,color:r.s==='work'?'#3d6b5e':'#c0392b'}}>{r.s==='work'?'○':'×'}</span>
+                  <span style={{fontSize:11,color:'#bbb',marginLeft:'auto'}}>✓ 反映済み</span>
+                </div>
+              ))}
+            </>}
+          </div>
+        )}
+      </div>
+
+      {modal&&(
+        <div onClick={()=>setModal(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.4)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:16,padding:22,width:300,boxShadow:'0 20px 60px rgba(0,0,0,0.2)'}}>
+            <div style={{fontWeight:700,fontSize:15,marginBottom:4}}>{modal.name}
+              <span style={{fontSize:10,padding:'2px 7px',borderRadius:10,marginLeft:8,background:store.al,color:store.accent}}>{store.label}</span>
+            </div>
+            <div style={{fontSize:12,color:'#888',marginBottom:12}}>{m}月{modal.day}日（{WEEK[dow(y,m,modal.day)]}）</div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:7,marginBottom:12}}>
+              {[{k:'work',mark:'○',label:'出勤',c:'#3d6b5e',bg:'#e8f2ef'},{k:'off',mark:'×',label:'休み',c:'#c0392b',bg:'#fdecea'},{k:'',mark:'—',label:'未定',c:'#aaa',bg:'#f5f5f5'}].map(o=>(
+                <div key={o.k} onClick={()=>setEs(o.k)} style={{padding:'8px 4px',borderRadius:8,border:`2px solid ${es===o.k?o.c:'#ddd'}`,background:es===o.k?o.bg:'#fff',cursor:'pointer',textAlign:'center',fontSize:12,transition:'all 0.1s'}}>
+                  <div style={{fontSize:18,color:es===o.k?o.c:'#ccc',lineHeight:1,marginBottom:2}}>{o.mark}</div>
+                  <div style={{color:es===o.k?o.c:'#aaa'}}>{o.label}</div>
+                </div>
+              ))}
+            </div>
+            {es==='work'&&(
+              <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:12}}>
+                <input value={et1} onChange={e=>setEt1(e.target.value)} placeholder="開始 9:00" style={C.inp({flex:1})}/>
+                <span style={{color:'#aaa',fontSize:12}}>〜</span>
+                <input value={et2} onChange={e=>setEt2(e.target.value)} placeholder="終了 18:00" style={C.inp({flex:1})}/>
+              </div>
+            )}
+            <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+              <button onClick={()=>setModal(null)} style={C.btn('#f0ede8','#888')}>キャンセル</button>
+              <button onClick={saveCell} style={C.btn(store.accent)}>保存</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReqCard({r,m,y,onApprove,onChange}){
+  const [show,setShow]=useState(false);
+  const [memo,setMemo]=useState('');
+  const store=STORES[r.store];
+  return(
+    <div style={{...C.card({padding:'12px 14px',borderLeft:`3px solid ${r.changeRequested?'#f39c12':'#e74c3c'}`,marginBottom:8})}}>
+      <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap',marginBottom:show||r.changeRequested?8:0}}>
+        <b style={{fontSize:14}}>{r.name}</b>
+        <span style={{fontSize:11,background:store.al,color:store.accent,borderRadius:8,padding:'1px 7px',fontWeight:700}}>{store.label}</span>
+        <span style={{fontSize:13}}>{m}月{r.day}日（{WEEK[dow(y,m,r.day)]}）</span>
+        <span style={{fontSize:13,fontWeight:700,color:r.s==='work'?'#3d6b5e':'#c0392b'}}>{r.s==='work'?'○ 出勤':'× 休み'}</span>
+        {r.t&&<span style={{fontSize:12,color:'#888'}}>{r.t}</span>}
+        {r.changeRequested&&<span style={{marginLeft:'auto',fontSize:11,background:'#fff3e0',color:'#f39c12',borderRadius:8,padding:'2px 9px',fontWeight:700}}>変更依頼済み</span>}
+        {!r.changeRequested&&<span style={{fontSize:11,color:'#bbb',marginLeft:'auto'}}>{r.ts}</span>}
+      </div>
+      {r.changeRequested&&r.changeMemo&&(
+        <div style={{fontSize:12,color:'#7a6010',background:'#fffce8',border:'1px solid #f0d9a0',borderRadius:7,padding:'6px 10px',marginBottom:8}}>💬 {r.changeMemo}</div>
+      )}
+      {show&&(
+        <textarea value={memo} onChange={e=>setMemo(e.target.value)} placeholder="変更をお願いする内容を入力してください"
+          style={{width:'100%',padding:'8px 10px',border:'1px solid #f0d060',borderRadius:8,fontSize:12,fontFamily:'inherit',resize:'vertical',minHeight:56,outline:'none',boxSizing:'border-box',background:'#fffce8',marginBottom:8}}/>
+      )}
+      <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+        {show?(
+          <><button onClick={()=>setShow(false)} style={C.btn('#f0ede8','#888')}>キャンセル</button>
+            <button onClick={()=>{onChange(memo);setShow(false);}} style={C.btn('#f39c12')}>変更依頼を送る</button></>
+        ):(
+          <><button onClick={()=>setShow(true)} style={C.btn('#fff3e0','#f39c12')}>変更依頼</button>
+            <button onClick={onApprove} style={C.btn('#3d6b5e')}>承認</button></>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════
+// VIEW (全員閲覧)
+// ══════════════════════════════════════════════
+function View({getSD,back}){
+  const [st,setSt]=useState('porto');
+  const [y,setY]=useState(2026);
+  const [m,setM]=useState(5);
+  const store=STORES[st];
+  const days=dim(y,m);
+  const data=getSD(st,y,m);
+  return(
+    <div style={{minHeight:'100vh',background:'#f5f3ef',fontFamily:'"Noto Sans JP",sans-serif'}}>
+      <div style={{background:'#fff',borderBottom:'1px solid #e0dbd4',padding:'10px 14px',position:'sticky',top:0,zIndex:100,boxShadow:'0 2px 8px rgba(0,0,0,0.06)'}}>
+        <div style={{maxWidth:1200,margin:'0 auto',display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',justifyContent:'space-between'}}>
+          <span style={{fontFamily:'Georgia,serif',fontSize:17,color:store.accent}}>{store.label} <span style={{fontFamily:'inherit',fontSize:10,color:'#aaa'}}>シフト確認</span></span>
+          <div style={{display:'flex',gap:5}}>
+            {Object.entries(STORES).map(([k,s])=><button key={k} onClick={()=>setSt(k)} style={{...C.btn(st===k?s.accent:'#f0ede8',st===k?'#fff':'#888'),fontSize:12,padding:'5px 13px'}}>{s.label}</button>)}
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:6}}>
+            <button onClick={()=>{if(m===1){setM(12);setY(p=>p-1);}else setM(p=>p-1);}} style={{width:26,height:26,borderRadius:'50%',border:'1px solid #ddd',background:'#fff',cursor:'pointer'}}>‹</button>
+            <span style={{fontSize:13,fontWeight:600,minWidth:96,textAlign:'center'}}>令和{y-2018}年 {m}月</span>
+            <button onClick={()=>{if(m===12){setM(1);setY(p=>p+1);}else setM(p=>p+1);}} style={{width:26,height:26,borderRadius:'50%',border:'1px solid #ddd',background:'#fff',cursor:'pointer'}}>›</button>
+          </div>
+          <button onClick={back} style={{...C.btn('#f0ede8','#888'),fontSize:11,padding:'5px 10px'}}>← 戻る</button>
+        </div>
+      </div>
+      <div style={{maxWidth:1200,margin:'0 auto',padding:'12px 14px',overflowX:'auto'}}>
+        <div style={{...C.card({overflow:'auto'})}}>
+          <table style={{width:'100%',borderCollapse:'collapse',minWidth:800}}>
+            <thead><tr>
+              <th style={{background:'#1a1a1a',color:'#fff',padding:'8px 12px',fontSize:12,width:80,minWidth:80,position:'sticky',left:0,zIndex:10,textAlign:'left'}}>氏名</th>
+              {Array.from({length:days},(_,i)=>i+1).map(d=>(
+                <th key={d} style={{background:isDark(y,m,d)?'#7a3030':isSat(y,m,d)?'#2a4a7a':'#1a1a1a',color:'#fff',padding:'3px 1px',width:30,minWidth:30}}>
+                  <div style={{fontSize:11,fontWeight:700}}>{d}</div>
+                  <div style={{fontSize:8,opacity:0.6}}>{WEEK[dow(y,m,d)]}</div>
+                </th>
+              ))}
+              <th style={{background:'#1a1a1a',color:'#fff',fontSize:10,width:34,padding:'3px'}}>日数</th>
+            </tr></thead>
+            <tbody>
+              {store.staff.map((name,ri)=>{
+                let wk=0; const rb=ri%2===0?'#fff':'#fafaf8';
+                return(
+                  <tr key={name}>
+                    <td style={{background:rb,padding:'7px 10px',fontSize:13,fontWeight:600,position:'sticky',left:0,zIndex:5,borderRight:'2px solid #e0dbd4',whiteSpace:'nowrap'}}>{name}</td>
+                    {Array.from({length:days},(_,i)=>i+1).map(d=>{
+                      const cell=data[name]?.[d];
+                      if(cell?.s==='work') wk++;
+                      return(
+                        <td key={d} style={{background:cellBg(y,m,d,cell?.s,rb),padding:1,height:44,verticalAlign:'middle',border:'1px solid #e8e4de'}}>
+                          <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',height:'100%'}}>
+                            {cell?.s==='work'&&<><span style={{fontSize:14,fontWeight:700,color:'#3d6b5e',lineHeight:1}}>○</span>{cell.t&&<span style={{fontSize:7,color:'#777'}}>{cell.t}</span>}</>}
+                            {cell?.s==='off'&&<span style={{fontSize:14,fontWeight:700,color:'#c0392b'}}>×</span>}
+                            {!cell&&<span style={{color:'#ddd',fontSize:13}}>·</span>}
+                          </div>
+                        </td>
+                      );
+                    })}
+                    <td style={{fontWeight:700,fontSize:12,color:store.accent,background:'#faf8f5',textAlign:'center',border:'1px solid #e8e4de'}}>{wk||'—'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════
+// STAFF
+// ══════════════════════════════════════════════
+function Staff({who,shifts,getSD,reqs,saveReqs,back}){
+  const myStores=Object.entries(STORES).filter(([,s])=>s.staff.includes(who));
+  const [cs,setCs]=useState(myStores[0]?.[0]||'porto');
+  const [y,setY]=useState(2026);
+  const [m,setM]=useState(5);
+  const [entries,setEntries]=useState({});
+  const [sent,setSent]=useState(false);
+  const store=STORES[cs];
+  const days=dim(y,m);
+  const conf=getSD(cs,y,m);
+  const cnt=Object.keys(entries).length;
+
+  const toggle=(d,s)=>{
+    setSent(false);
+    setEntries(p=>{
+      const cur=p[d];
+      if(cur?.s===s){const n={...p};delete n[d];return n;}
+      return{...p,[d]:{s,t:cur?.t||''}};
+    });
+  };
+
+  const submit=async()=>{
+    const nx={...reqs};
+    Object.entries(entries).forEach(([day,val])=>{
+      if(!val.s)return;
+      const id=`${who}-${day}-${cs}-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
+      nx[id]={name:who,day:+day,store:cs,s:val.s,t:val.t||'',ts:new Date().toLocaleString('ja-JP'),approved:false};
+    });
+    await saveReqs(nx);
+    setSent(true);setEntries({});
+  };
+
+  return(
+    <div style={{minHeight:'100vh',background:'#f5f3ef',fontFamily:'"Noto Sans JP",sans-serif'}}>
+      <div style={{background:'#fff',borderBottom:'1px solid #e0dbd4',padding:'10px 14px',position:'sticky',top:0,zIndex:100,boxShadow:'0 2px 8px rgba(0,0,0,0.06)'}}>
+        <div style={{maxWidth:600,margin:'0 auto',display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',justifyContent:'space-between'}}>
+          <div><div style={{fontFamily:'Georgia,serif',fontSize:15,color:store.accent}}>{store.label}</div><div style={{fontSize:11,color:'#aaa'}}>{who} さんのシフト希望</div></div>
+          {myStores.length>1&&(
+            <div style={{display:'flex',gap:5}}>
+              {myStores.map(([k,s])=><button key={k} onClick={()=>{setCs(k);setEntries({});setSent(false);}} style={{...C.btn(cs===k?s.accent:'#f0ede8',cs===k?'#fff':'#888'),fontSize:11,padding:'4px 11px'}}>{s.label}</button>)}
+            </div>
+          )}
+          <div style={{display:'flex',alignItems:'center',gap:6}}>
+            <button onClick={()=>{if(m===1){setM(12);setY(p=>p-1);}else setM(p=>p-1);}} style={{width:26,height:26,borderRadius:'50%',border:'1px solid #ddd',background:'#fff',cursor:'pointer'}}>‹</button>
+            <span style={{fontSize:12,fontWeight:600,minWidth:86,textAlign:'center'}}>令和{y-2018}年 {m}月</span>
+            <button onClick={()=>{if(m===12){setM(1);setY(p=>p+1);}else setM(p=>p+1);}} style={{width:26,height:26,borderRadius:'50%',border:'1px solid #ddd',background:'#fff',cursor:'pointer'}}>›</button>
+          </div>
+          <button onClick={back} style={{...C.btn('#f0ede8','#888'),fontSize:11,padding:'4px 9px'}}>← 戻る</button>
+        </div>
+      </div>
+
+      <div style={{maxWidth:600,margin:'0 auto',padding:'12px 14px 100px'}}>
+        <div style={{background:'#fff',borderRadius:10,padding:'8px 14px',marginBottom:10,display:'flex',gap:14,alignItems:'center',flexWrap:'wrap',fontSize:12,color:'#888',boxShadow:'0 1px 5px rgba(0,0,0,0.05)'}}>
+          <span style={{color:'#3d6b5e',fontWeight:700}}>○ 出勤希望</span>
+          <span style={{color:'#c0392b',fontWeight:700}}>× 休み希望</span>
+          {cnt>0&&<span style={{marginLeft:'auto',color:store.accent,fontWeight:700}}>{cnt}日入力済み</span>}
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:5}}>
+          {Array.from({length:days},(_,i)=>i+1).map(d=>{
+            const dc = isDark(y,m,d)?'sun':isSat(y,m,d)?'sat':'';
+            const dw=dow(y,m,d);
+            const entry=entries[d];
+            const cfm=conf[who]?.[d];
+            const sel=entry?.s;
+            return(
+              <div key={d} style={{background:dc==='sun'?'#fdf4f0':dc==='sat'?'#f0f4fd':'#fff',borderRadius:10,padding:'8px 12px',boxShadow:'0 1px 3px rgba(0,0,0,0.04)',border:`1px solid ${sel==='work'?'#3d6b5e':sel==='off'?'#c0392b':'transparent'}`}}>
+                <div style={{display:'flex',alignItems:'center',gap:8}}>
+                  <div style={{minWidth:54}}>
+                    <span style={{fontSize:14,fontWeight:700,color:dc==='sun'?'#c0392b':dc==='sat'?'#2a4a7a':'#1a1a1a'}}>{m}/{d}</span>
+                    <span style={{fontSize:11,color:dc==='sun'?'#c0392b':dc==='sat'?'#2a4a7a':'#888',marginLeft:3}}>({WEEK[dw]})</span>
+                  </div>
+                  {cfm&&<div style={{fontSize:10,color:'#aaa',background:'#f0f0f0',borderRadius:5,padding:'1px 7px',whiteSpace:'nowrap'}}>確定：{cfm.s==='work'?'○':'×'}{cfm.t?` ${cfm.t}`:''}</div>}
+                  <div style={{display:'flex',gap:5,marginLeft:'auto'}}>
+                    <button onClick={()=>toggle(d,'work')} style={{width:42,height:34,borderRadius:8,border:`2px solid ${sel==='work'?'#3d6b5e':'#ddd'}`,background:sel==='work'?'#e8f2ef':'#fff',color:sel==='work'?'#3d6b5e':'#ccc',fontWeight:700,fontSize:17,cursor:'pointer'}}>○</button>
+                    <button onClick={()=>toggle(d,'off')}  style={{width:42,height:34,borderRadius:8,border:`2px solid ${sel==='off'?'#c0392b':'#ddd'}`,background:sel==='off'?'#fdecea':'#fff',color:sel==='off'?'#c0392b':'#ccc',fontWeight:700,fontSize:17,cursor:'pointer'}}>×</button>
+                  </div>
+                </div>
+                {sel==='work'&&(
+                  <div style={{display:'flex',gap:6,alignItems:'center',marginTop:7}}>
+                    <input value={entry?.t?.split('-')[0]||''} onChange={e=>{const en=entry?.t?.split('-')[1]||'';setEntries(p=>({...p,[d]:{...p[d],t:`${e.target.value}-${en}`}}));}} placeholder="開始 9:00" style={C.inp({flex:1,fontSize:11,padding:'5px 8px'})}/>
+                    <span style={{color:'#aaa',fontSize:12}}>〜</span>
+                    <input value={entry?.t?.split('-')[1]||''} onChange={e=>{const s2=entry?.t?.split('-')[0]||'';setEntries(p=>({...p,[d]:{...p[d],t:`${s2}-${e.target.value}`}}));}} placeholder="終了 18:00" style={C.inp({flex:1,fontSize:11,padding:'5px 8px'})}/>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={{position:'fixed',bottom:0,left:0,right:0,background:'#fff',borderTop:'1px solid #e0dbd4',padding:'10px 14px',boxShadow:'0 -4px 14px rgba(0,0,0,0.07)'}}>
+        <div style={{maxWidth:600,margin:'0 auto',display:'flex',alignItems:'center',justifyContent:'space-between',gap:10}}>
+          {sent
+            ?<div style={{color:'#3d6b5e',fontWeight:700,fontSize:14}}>✓ 申請を送信しました！</div>
+            :<div style={{fontSize:13,color:'#888'}}>{cnt>0?`${cnt}日分入力中`:'希望日をタップしてください'}</div>}
+          <button onClick={submit} disabled={cnt===0||sent}
+            style={{...C.btn(cnt>0&&!sent?store.accent:'#ccc'),padding:'10px 22px',fontSize:14,opacity:cnt>0&&!sent?1:0.6}}>
+            申請する（{cnt}日）
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+</script>
+</body>
+</html>
