@@ -18,110 +18,57 @@ input, button, textarea { font-family: inherit; }
 <script type="text/babel" data-presets="env,react">
 const { useState, useEffect } = React;
 
-// ============================================================
-// SUPABASE CONFIG
-// ============================================================
 const SUPA_URL = 'https://fivpcojxkaafytpyfvlj.supabase.co';
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZpdnBjb2p4a2FhZnl0cHlmdmxqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY1ODIwMTUsImV4cCI6MjA5MjE1ODAxNX0.OvxRBJnzEQtWKgPf9DoZWQfSYJJwfQtaStFu-fdRGYI';
-
 async function supaFetch(path, options={}) {
   const res = await fetch(SUPA_URL + '/rest/v1/' + path, {
-    headers: {
-      'apikey': SUPA_KEY,
-      'Authorization': 'Bearer ' + SUPA_KEY,
-      'Content-Type': 'application/json',
-      'Prefer': options.prefer || 'return=representation',
-      ...options.headers
-    },
+    headers: {'apikey':SUPA_KEY,'Authorization':'Bearer '+SUPA_KEY,'Content-Type':'application/json','Prefer':options.prefer||'return=representation',...options.headers},
     ...options
   });
-  if(!res.ok) {
-    const err = await res.text();
-    throw new Error(err);
-  }
-  const text = await res.text();
-  return text ? JSON.parse(text) : [];
+  if(!res.ok){const err=await res.text();throw new Error(err);}
+  const text=await res.text();return text?JSON.parse(text):[];
 }
-
-// シフト取得
-async function dbGetShifts() {
-  try {
-    const rows = await supaFetch('shifts?select=*');
-    const result = {};
-    rows.forEach(r => {
-      const k = r.store + '-' + r.year + '-' + r.month;
-      if(!result[k]) result[k] = {};
-      if(!result[k][r.name]) result[k][r.name] = {};
-      result[k][r.name][r.day] = {s: r.status, t: r.time_range};
+async function dbGetShifts(){
+  try{
+    const rows=await supaFetch('shifts?select=*');
+    const result={};
+    rows.forEach(r=>{
+      const k=r.store+'-'+r.year+'-'+r.month;
+      if(!result[k])result[k]={};
+      if(!result[k][r.name])result[k][r.name]={};
+      result[k][r.name][r.day]={s:r.status,t:r.time_range};
     });
     return result;
-  } catch(e) { console.error('dbGetShifts:', e); return {}; }
+  }catch(e){console.error('dbGetShifts:',e);return {};}
 }
-
-// シフト保存（差分のみ）
-async function dbSaveShifts(newShifts, oldShifts) {
-  try {
-    const upserts = [];
-    const deletes = [];
-    Object.entries(newShifts).forEach(([k, storeData]) => {
-      const [store, year, month] = k.split('-');
-      Object.entries(storeData).forEach(([name, days]) => {
-        Object.entries(days).forEach(([day, cell]) => {
-          if(!cell || !cell.s) return;
-          upserts.push({
-            id: store+'-'+year+'-'+month+'-'+name+'-'+day,
-            store, year: +year, month: +month, name, day: +day,
-            status: cell.s, time_range: cell.t||''
-          });
+async function dbSaveShifts(newShifts){
+  try{
+    const upserts=[];
+    Object.entries(newShifts).forEach(([k,sd])=>{
+      const[store,year,month]=k.split('-');
+      Object.entries(sd).forEach(([name,days])=>{
+        Object.entries(days).forEach(([day,cell])=>{
+          if(!cell||!cell.s)return;
+          upserts.push({id:store+'-'+year+'-'+month+'-'+name+'-'+day,store,year:+year,month:+month,name,day:+day,status:cell.s,time_range:cell.t||''});
         });
       });
     });
-    if(upserts.length > 0) {
-      await supaFetch('shifts', {
-        method: 'POST',
-        prefer: 'resolution=merge-duplicates',
-        body: JSON.stringify(upserts)
-      });
-    }
-  } catch(e) { console.error('dbSaveShifts:', e); }
+    if(upserts.length>0)await supaFetch('shifts',{method:'POST',prefer:'resolution=merge-duplicates',body:JSON.stringify(upserts)});
+  }catch(e){console.error('dbSaveShifts:',e);}
 }
-
-// 申請取得
-async function dbGetRequests() {
-  try {
-    const rows = await supaFetch('requests?select=*&order=created_at.desc');
-    const result = {};
-    rows.forEach(r => {
-      result[r.id] = {
-        name: r.name, store: r.store, year: r.year, month: r.month,
-        day: r.day, s: r.status, t: r.time_range,
-        approved: r.approved, changeRequested: r.change_requested,
-        changeMemo: r.change_memo, ts: r.submitted_at
-      };
-    });
+async function dbGetRequests(){
+  try{
+    const rows=await supaFetch('requests?select=*&order=created_at.desc');
+    const result={};
+    rows.forEach(r=>{result[r.id]={name:r.name,store:r.store,year:r.year,month:r.month,day:r.day,s:r.status,t:r.time_range,approved:r.approved,changeRequested:r.change_requested,changeMemo:r.change_memo,ts:r.submitted_at};});
     return result;
-  } catch(e) { console.error('dbGetRequests:', e); return {}; }
+  }catch(e){console.error('dbGetRequests:',e);return {};}
 }
-
-// 申請保存
-async function dbSaveRequest(id, req) {
-  try {
-    await supaFetch('requests', {
-      method: 'POST',
-      prefer: 'resolution=merge-duplicates',
-      body: JSON.stringify([{
-        id, name: req.name, store: req.store,
-        year: req.year||2026, month: req.month||5,
-        day: req.day, status: req.s, time_range: req.t||'',
-        approved: req.approved||false,
-        change_requested: req.changeRequested||false,
-        change_memo: req.changeMemo||'',
-        submitted_at: req.ts||''
-      }])
-    });
-  } catch(e) { console.error('dbSaveRequest:', e); }
+async function dbSaveRequest(id,req){
+  try{
+    await supaFetch('requests',{method:'POST',prefer:'resolution=merge-duplicates',body:JSON.stringify([{id,name:req.name,store:req.store,year:req.year||2026,month:req.month||5,day:req.day,status:req.s,time_range:req.t||'',approved:req.approved||false,change_requested:req.changeRequested||false,change_memo:req.changeMemo||'',submitted_at:req.ts||''}])});
+  }catch(e){console.error('dbSaveRequest:',e);}
 }
-
 const WEEK = ['日','月','火','水','木','金','土'];
 const STORES = {
   porto: { label:'Porto', accent:'#9d7c52', al:'#f3ecdf', deep:'#3a2f20', staff:['今村','西平 樹里','高須','内藤','深谷','村井','増田','森','西平 未来'] },
@@ -160,20 +107,14 @@ function App() {
         const pw = localStorage.getItem('porto_admin_pw');
         if(pw) setAdminPw(pw);
         const [sr, rr] = await Promise.all([dbGetShifts(), dbGetRequests()]);
-        setShifts(sr);
-        setReqs(rr);
+        setShifts(sr); setReqs(rr);
       } catch(e){ console.error('load error:', e); }
       setReady(true);
     })();
   }, []);
 
-  const saveShifts = async (next) => { setShifts(next); await dbSaveShifts(next, shifts); };
-  const saveReqs = async (next) => {
-    setReqs(next);
-    // 差分だけ保存
-    const diff = Object.entries(next).filter(([k,v]) => JSON.stringify(v) !== JSON.stringify(reqs[k]));
-    for(const [id, req] of diff) { await dbSaveRequest(id, req); }
-  };
+  const saveShifts = async (next) => { setShifts(next); await dbSaveShifts(next); };
+  const saveReqs = async (next) => { setReqs(next); const diff=Object.entries(next).filter(([k,v])=>JSON.stringify(v)!==JSON.stringify(reqs[k])); for(const [id,req] of diff){await dbSaveRequest(id,req);} };
   const savePw     = (next) => { setAdminPw(next); try{ localStorage.setItem('porto_admin_pw', next); }catch{} };
 
   const getSD = (st,y,m) => {
@@ -916,21 +857,52 @@ function Staff({who,getSD,reqs,saveReqs,back}){
         </div>
       </div>
 
-      {/* 時間入力ダイアログ */}
+      {/* 時間入力ダイアログ - タップ選択式 */}
       {timeDialog&&(
-        <div onClick={()=>setTimeDialog(null)} style={{position:'fixed',inset:0,background:'rgba(58,47,32,0.55)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:16,backdropFilter:'blur(4px)'}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:'#faf7f1',padding:26,width:300,maxWidth:'100%',border:'1px solid #e8dfca'}}>
-            <div style={{fontSize:10,letterSpacing:'0.2em',color:'#bba98e',marginBottom:8}}>TIME</div>
-            <div style={{fontFamily:SERIF,fontSize:20,color:'#3a2f20',marginBottom:3}}>{m}月{timeDialog.day}日</div>
-            <div style={{fontSize:12,color:'#a89a85',marginBottom:18}}>出勤時間を入力してください</div>
-            <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:18}}>
-              <input value={tStart} onChange={e=>setTStart(e.target.value)} placeholder="9:00" style={{flex:1,padding:'10px 12px',border:'1px solid #e8dfca',fontSize:13,fontFamily:'inherit',outline:'none',background:'#fff',color:'#3a2f20'}}/>
-              <span style={{color:'#bba98e'}}>—</span>
-              <input value={tEnd} onChange={e=>setTEnd(e.target.value)} placeholder="18:00" style={{flex:1,padding:'10px 12px',border:'1px solid #e8dfca',fontSize:13,fontFamily:'inherit',outline:'none',background:'#fff',color:'#3a2f20'}}/>
+        <div onClick={()=>setTimeDialog(null)} style={{position:'fixed',inset:0,background:'rgba(58,47,32,0.55)',zIndex:300,display:'flex',alignItems:'flex-end',justifyContent:'center',backdropFilter:'blur(4px)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:'#faf7f1',padding:20,width:'100%',maxWidth:480,border:'1px solid #e8dfca',maxHeight:'90vh',overflowY:'auto',borderTopLeftRadius:12,borderTopRightRadius:12}}>
+            <div style={{fontSize:10,letterSpacing:'0.2em',color:'#bba98e',marginBottom:6,textAlign:'center'}}>TIME</div>
+            <div style={{fontFamily:SERIF,fontSize:20,color:'#3a2f20',marginBottom:2,textAlign:'center'}}>{m}月{timeDialog.day}日</div>
+            <div style={{fontSize:12,color:'#a89a85',marginBottom:16,textAlign:'center'}}>時間をタップして選択</div>
+
+            {/* 現在の選択表示 */}
+            <div style={{background:'#fff',border:'1px solid #e8dfca',padding:'14px',marginBottom:16,textAlign:'center',display:'flex',alignItems:'center',justifyContent:'center',gap:14}}>
+              <div>
+                <div style={{fontSize:9,letterSpacing:'0.15em',color:'#bba98e',marginBottom:2}}>START</div>
+                <div style={{fontFamily:SERIF,fontSize:22,color:'#3a2f20'}}>{tStart||'—'}</div>
+              </div>
+              <div style={{color:'#bba98e',fontSize:16}}>〜</div>
+              <div>
+                <div style={{fontSize:9,letterSpacing:'0.15em',color:'#bba98e',marginBottom:2}}>END</div>
+                <div style={{fontFamily:SERIF,fontSize:22,color:'#3a2f20'}}>{tEnd||'—'}</div>
+              </div>
             </div>
-            <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
-              <button onClick={()=>setTimeDialog(null)} style={{padding:'9px 16px',border:'1px solid #e8dfca',background:'#fff',color:'#a89a85',fontSize:12,fontFamily:SERIF,cursor:'pointer'}}>Cancel</button>
-              <button onClick={saveTime} style={{padding:'9px 22px',border:'none',background:store.deep,color:'#faf7f1',fontSize:12,fontFamily:SERIF,letterSpacing:'0.1em',cursor:'pointer'}}>Save</button>
+
+            {/* 開始時間 */}
+            <div style={{fontSize:11,letterSpacing:'0.1em',color:'#a89a85',marginBottom:6}}>開始時間</div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(6,1fr)',gap:4,marginBottom:14}}>
+              {['8:00','8:30','9:00','9:30','10:00','10:30','11:00','11:30','12:00','13:00','14:00','14:30','15:00','16:00','17:00','18:00'].map(t=>(
+                <button key={t} onClick={()=>setTStart(t)}
+                  style={{padding:'10px 4px',border:`1px solid ${tStart===t?'#3d6b5e':'#e8dfca'}`,background:tStart===t?'#e8f2ef':'#fff',color:tStart===t?'#3d6b5e':'#5a4d3a',fontFamily:SERIF,fontSize:12,cursor:'pointer',transition:'all 0.12s',fontWeight:tStart===t?600:400}}>
+                  {t}
+                </button>
+              ))}
+            </div>
+
+            {/* 終了時間 */}
+            <div style={{fontSize:11,letterSpacing:'0.1em',color:'#a89a85',marginBottom:6}}>終了時間</div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(6,1fr)',gap:4,marginBottom:18}}>
+              {['13:00','13:30','14:00','14:30','15:00','15:30','16:00','16:30','17:00','17:30','18:00','18:30','19:00'].map(t=>(
+                <button key={t} onClick={()=>setTEnd(t)}
+                  style={{padding:'10px 4px',border:`1px solid ${tEnd===t?'#3d6b5e':'#e8dfca'}`,background:tEnd===t?'#e8f2ef':'#fff',color:tEnd===t?'#3d6b5e':'#5a4d3a',fontFamily:SERIF,fontSize:12,cursor:'pointer',transition:'all 0.12s',fontWeight:tEnd===t?600:400}}>
+                  {t}
+                </button>
+              ))}
+            </div>
+
+            <div style={{display:'flex',gap:8}}>
+              <button onClick={()=>setTimeDialog(null)} style={{flex:1,padding:'14px',border:'1px solid #e8dfca',background:'#fff',color:'#a89a85',fontSize:13,fontFamily:SERIF,letterSpacing:'0.05em',cursor:'pointer'}}>Cancel</button>
+              <button onClick={saveTime} style={{flex:2,padding:'14px',border:'none',background:store.deep,color:'#faf7f1',fontSize:13,fontFamily:SERIF,letterSpacing:'0.15em',cursor:'pointer'}}>Save</button>
             </div>
           </div>
         </div>
