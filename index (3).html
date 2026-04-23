@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Porto シフト管理</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:"Noto Sans JP",sans-serif;background:#faf7f1}
+html,body{-webkit-overflow-scrolling:touch}
+input,button,textarea{font-family:inherit}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="env,react">
+const { useState, useEffect } = React;
+
+const SUPA_URL='https://fivpcojxkaafytpyfvlj.supabase.co',SUPA_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZpdnBjb2p4a2FhZnl0cHlmdmxqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY1ODIwMTUsImV4cCI6MjA5MjE1ODAxNX0.OvxRBJnzEQtWKgPf9DoZWQfSYJJwfQtaStFu-fdRGYI';
+async function supaFetch(p,o={}){const r=await fetch(SUPA_URL+'/rest/v1/'+p,{headers:{'apikey':SUPA_KEY,'Authorization':'Bearer '+SUPA_KEY,'Content-Type':'application/json','Prefer':o.prefer||'return=representation',...o.headers},...o});if(!r.ok){const e=await r.text();throw new Error(e);}const t=await r.text();return t?JSON.parse(t):[];}
+async function dbGetShifts(){try{const rows=await supaFetch('shifts?select=*');const res={};rows.forEach(r=>{const k=r.store+'-'+r.year+'-'+r.month;if(!res[k])res[k]={};if(!res[k][r.name])res[k][r.name]={};res[k][r.name][r.day]={s:r.status,t:r.time_range};});return res;}catch(e){console.error(e);return {};}}
+async function dbSaveShifts(ns){try{const u=[];Object.entries(ns).forEach(([k,sd])=>{const[store,year,month]=k.split('-');Object.entries(sd).forEach(([name,days])=>{Object.entries(days).forEach(([day,cell])=>{if(!cell||!cell.s)return;u.push({id:store+'-'+year+'-'+month+'-'+name+'-'+day,store,year:+year,month:+month,name,day:+day,status:cell.s,time_range:cell.t||''});});});});if(u.length)await supaFetch('shifts',{method:'POST',prefer:'resolution=merge-duplicates',body:JSON.stringify(u)});}catch(e){console.error(e);}}
+async function dbGetRequests(){try{const rows=await supaFetch('requests?select=*&order=created_at.desc');const res={};rows.forEach(r=>{res[r.id]={name:r.name,store:r.store,year:r.year,month:r.month,day:r.day,s:r.status,t:r.time_range,approved:r.approved,changeRequested:r.change_requested,changeMemo:r.change_memo,ts:r.submitted_at};});return res;}catch(e){console.error(e);return {};}}
+async function dbSaveRequest(id,req){try{await supaFetch('requests',{method:'POST',prefer:'resolution=merge-duplicates',body:JSON.stringify([{id,name:req.name,store:req.store,year:req.year||2026,month:req.month||5,day:req.day,status:req.s,time_range:req.t||'',approved:req.approved||false,change_requested:req.changeRequested||false,change_memo:req.changeMemo||'',submitted_at:req.ts||''}])});}catch(e){console.error(e);}}
+const WEEK = ['日','月','火','水','木','金','土'];
+const STORES = {
+  porto: { label:'Porto', accent:'#9d7c52', al:'#f3ecdf', deep:'#3a2f20', staff:['今村','西平 樹里','高須','内藤','深谷','村井','増田','森','西平 未来'] },
+  tete:  { label:'tete',  accent:'#4a6b85', al:'#dde6ef', deep:'#1e2d3b', staff:['増田','伏見','山口','内藤'] }
+};
+const ALL_STAFF = [...new Set([...STORES.porto.staff, ...STORES.tete.staff])];
+
+const SERIF = '"Playfair Display", "Noto Serif JP", serif';
+const BODY  = '"Noto Sans JP", sans-serif';
+
+function dim(y,m){ return new Date(y,m,0).getDate(); }
+function dow(y,m,d){ return new Date(y,m-1,d).getDay(); }
+function isSun(y,m,d){ return dow(y,m,d)===0||(y===2026&&m===5&&[3,4,5,6].includes(d)); }
+function isSat(y,m,d){ return dow(y,m,d)===6; }
+
+function App() {
+  const [screen, setScreen] = useState('top');
+  const [who, setWho]       = useState('');
+  const [shifts, setShifts] = useState({});
+  const [reqs, setReqs]     = useState({});
+  const [ready, setReady]   = useState(false);
+  const [adminAuthed, setAdminAuthed] = useState(false);
+  const [adminPw, setAdminPw] = useState('porto2026'); // デフォルトパスワード
+
+  useEffect(() => {
+    // Google Fontsを読み込み
+    if(!document.getElementById('pf-fonts')) {
+      const l = document.createElement('link');
+      l.id = 'pf-fonts';
+      l.rel = 'stylesheet';
+      l.href = 'https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;1,400&family=Noto+Serif+JP:wght@400;500;600&family=Noto+Sans+JP:wght@300;400;500;600;700&display=swap';
+      document.head.appendChild(l);
+    }
+    (async () => {
+      try {
+        const pw = localStorage.getItem('porto_admin_pw');
+        if(pw) setAdminPw(pw);
+        const [sr, rr] = await Promise.all([dbGetShifts(), dbGetRequests()]);
+        setShifts(sr); setReqs(rr);
+      } catch(e){ console.error('load error:', e); }
+      setReady(true);
+    })();
+  }, []);
+
+  const saveShifts = async (next) => { setShifts(next); await dbSaveShifts(next); };
+  const saveReqs = async (next) => { setReqs(next); const diff=Object.entries(next).filter(([k,v])=>JSON.stringify(v)!==JSON.stringify(reqs[k])); for(const [id,req] of diff){await dbSaveRequest(id,req);} };
+  const savePw     = (next) => { setAdminPw(next); try{ localStorage.setItem('porto_admin_pw', next); }catch{} };
+
+  const getSD = (st,y,m) => {
+    const k=`${st}-${y}-${m}`;
+    const base = shifts[k] || {};
+    const d = {};
+    STORES[st].staff.forEach(s=>{ d[s] = base[s]||{}; });
+    return d;
+  };
+
+  if(!ready) return (
+    <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',fontFamily:BODY,color:'#a89a85',background:'#faf7f1'}}>
+      <div style={{textAlign:'center'}}>
+        <div style={{fontFamily:SERIF,fontSize:48,fontStyle:'italic',color:'#9d7c52',marginBottom:12,letterSpacing:'0.02em'}}>Porto</div>
+        <div style={{fontSize:11,letterSpacing:'0.3em',color:'#bba98e'}}>LOADING</div>
+      </div>
+    </div>
+  );
+
+  if(screen==='admin') {
+    if(!adminAuthed) return <AdminLogin correctPw={adminPw} onSuccess={()=>setAdminAuthed(true)} back={()=>setScreen('top')}/>;
+    return <Admin shifts={shifts} reqs={reqs} getSD={getSD} saveShifts={saveShifts} saveReqs={saveReqs} adminPw={adminPw} savePw={savePw} back={()=>{setAdminAuthed(false);setScreen('top');}}/>;
+  }
+  if(screen==='staff') return <Staff who={who} shifts={shifts} getSD={getSD} reqs={reqs} saveReqs={saveReqs} back={()=>setScreen('top')}/>;
+  if(screen==='view')  return <View getSD={getSD} back={()=>setScreen('top')}/>;
+
+  return <TopScreen who={who} setWho={setWho} setScreen={setScreen}/>;
+}
+
+
+// ══════════════════════════════════════════════
+// ADMIN LOGIN
+// ══════════════════════════════════════════════
+function AdminLogin({correctPw,onSuccess,back}){
+  const [pw,setPw]=useState('');
+  const [error,setError]=useState(false);
+  const [show,setShow]=useState(false);
+
+  const tryLogin=()=>{
+    if(pw===correctPw){
+      setError(false);
+      onSuccess();
+    } else {
+      setError(true);
+      setTimeout(()=>setError(false),1500);
+    }
+  };
+
+  return(
+    <div style={{minHeight:'100vh',background:'linear-gradient(180deg,#faf7f1 0%,#f5f0e6 100%)',fontFamily:BODY,display:'flex',alignItems:'center',justifyContent:'center',padding:20,position:'relative',overflow:'hidden'}}>
+      <div style={{position:'absolute',top:'15%',right:'-60px',width:200,height:200,border:'1px solid #d9c8a9',borderRadius:'50%',opacity:0.4,pointerEvents:'none'}}/>
+      <div style={{position:'absolute',bottom:'10%',left:'-80px',width:260,height:260,border:'1px solid #c9b896',borderRadius:'50%',opacity:0.3,pointerEvents:'none'}}/>
+
+      <div style={{width:'100%',maxWidth:380,position:'relative'}}>
+        <button onClick={back} style={{background:'none',border:'none',color:'#a89a85',fontSize:11,letterSpacing:'0.1em',cursor:'pointer',fontFamily:SERIF,marginBottom:20,padding:0}}>← Back</button>
+
+        <div style={{textAlign:'center',marginBottom:36}}>
+          <div style={{fontSize:30,marginBottom:10}}>🔐</div>
+          <div style={{fontFamily:SERIF,fontSize:24,color:'#3a2f20',letterSpacing:'0.01em',marginBottom:6}}>Manager Access</div>
+          <div style={{width:40,height:1,background:'#9d7c52',margin:'12px auto'}}/>
+          <div style={{fontSize:11,letterSpacing:'0.2em',color:'#a89a85'}}>管理者パスワードを入力</div>
+        </div>
+
+        <div style={{background:'#fff',border:'1px solid #e8dfca',padding:28,animation:error?'shake 0.4s':'none'}}>
+          <div style={{display:'flex',gap:0,alignItems:'stretch',marginBottom:16,border:`1px solid ${error?'#c0392b':'#e8dfca'}`,transition:'border-color 0.2s'}}>
+            <input
+              type={show?'text':'password'}
+              value={pw}
+              onChange={e=>setPw(e.target.value)}
+              onKeyDown={e=>{if(e.key==='Enter')tryLogin();}}
+              placeholder="Password"
+              autoFocus
+              style={{flex:1,padding:'12px 14px',border:'none',fontSize:14,fontFamily:'inherit',outline:'none',background:'#fff',color:'#3a2f20',letterSpacing:show?'0.02em':'0.2em'}}
+            />
+            <button onClick={()=>setShow(!show)} style={{border:'none',borderLeft:'1px solid #e8dfca',background:'#faf7f1',padding:'0 14px',cursor:'pointer',color:'#a89a85',fontSize:12}}>
+              {show?'隠す':'表示'}
+            </button>
+          </div>
+
+          {error&&<div style={{fontSize:11,color:'#c0392b',marginBottom:14,letterSpacing:'0.05em'}}>パスワードが違います</div>}
+
+          <button onClick={tryLogin} style={{width:'100%',padding:'13px',background:'#3a2f20',color:'#faf7f1',border:'none',fontFamily:SERIF,fontSize:13,letterSpacing:'0.15em',cursor:'pointer',transition:'background 0.2s'}}
+            onMouseEnter={e=>e.currentTarget.style.background='#5a4d3a'}
+            onMouseLeave={e=>e.currentTarget.style.background='#3a2f20'}>
+            Sign In →
+          </button>
+        </div>
+
+        <div style={{textAlign:'center',marginTop:20,fontSize:10,color:'#bba98e',letterSpacing:'0.15em'}}>
+          初期パスワード: porto2026
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes shake {
+          0%,100% { transform: translateX(0); }
+          25% { transform: translateX(-6px); }
+          75% { transform: translateX(6px); }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════
+// TOP SCREEN
+// ══════════════════════════════════════════════
+function TopScreen({who,setWho,setScreen}){
+  const [open,setOpen]=useState(false);
+
+  return(
+    <div style={{minHeight:'100vh',background:'linear-gradient(180deg,#faf7f1 0%,#f5f0e6 100%)',fontFamily:BODY,padding:'40px 20px',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',position:'relative',overflow:'hidden'}}>
+
+      {/* 装飾 */}
+      <div style={{position:'absolute',top:'15%',right:'-60px',width:200,height:200,border:'1px solid #d9c8a9',borderRadius:'50%',opacity:0.4,pointerEvents:'none'}}/>
+      <div style={{position:'absolute',bottom:'10%',left:'-80px',width:260,height:260,border:'1px solid #c9b896',borderRadius:'50%',opacity:0.3,pointerEvents:'none'}}/>
+
+      <div style={{width:'100%',maxWidth:420,position:'relative'}}>
+
+        {/* ロゴセクション */}
+        <div style={{textAlign:'center',marginBottom:48,animation:'fadeSlide 0.8s ease'}}>
+          <div style={{fontSize:10,letterSpacing:'0.5em',color:'#bba98e',marginBottom:14}}>EST. 2011 — HIGASHIURA</div>
+          <div style={{fontFamily:SERIF,fontSize:56,color:'#3a2f20',letterSpacing:'0.01em',lineHeight:1,marginBottom:8,fontWeight:500}}>Porto</div>
+          <div style={{width:40,height:1,background:'#9d7c52',margin:'16px auto'}}/>
+          <div style={{fontFamily:SERIF,fontStyle:'italic',fontSize:14,color:'#9d7c52',letterSpacing:'0.15em'}}>Shift Management</div>
+        </div>
+
+        {/* メニューカード */}
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+          <MenuCard num="01" icon="👑" title="管理者" sub="シフト編集・申請の承認" accent="#9d7c52" onClick={()=>setScreen('admin')}/>
+          <MenuCard num="02" icon="📋" title="シフト確認" sub="確定済みの勤務一覧を見る" accent="#4a6b85" onClick={()=>setScreen('view')}/>
+
+          {/* スタッフ申請 */}
+          <div style={{background:'#fff',borderRadius:2,padding:22,border:'1px solid #e8dfca',boxShadow:'0 1px 3px rgba(58,47,32,0.04)',position:'relative'}}>
+            <div style={{display:'flex',alignItems:'flex-start',gap:14,marginBottom:14}}>
+              <div style={{fontFamily:SERIF,fontSize:22,color:'#bba98e',fontStyle:'italic',lineHeight:1,marginTop:2}}>03</div>
+              <div style={{flex:1}}>
+                <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:3}}>
+                  <span style={{fontSize:20}}>✋</span>
+                  <div style={{fontFamily:SERIF,fontSize:16,fontWeight:500,color:'#3a2f20'}}>スタッフ希望申請</div>
+                </div>
+                <div style={{fontSize:12,color:'#a89a85',letterSpacing:'0.02em'}}>カレンダーから希望を入力</div>
+              </div>
+            </div>
+
+            <div style={{position:'relative'}}>
+              <div onClick={()=>setOpen(v=>!v)} style={{padding:'11px 14px',border:'1px solid #e8dfca',borderRadius:2,fontSize:13,cursor:'pointer',background:'#faf7f1',color:who?'#3a2f20':'#bba98e',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <span>{who || '名前を選んでください'}</span>
+                <span style={{fontSize:10,color:'#9d7c52'}}>{open?'▲':'▼'}</span>
+              </div>
+              {open && (
+                <div style={{position:'absolute',bottom:'calc(100% + 4px)',left:0,right:0,background:'#fff',border:'1px solid #e8dfca',zIndex:20,maxHeight:400,overflowY:'auto',WebkitOverflowScrolling:'touch',boxShadow:'0 -8px 24px rgba(58,47,32,0.08)'}}>
+                  {ALL_STAFF.map(n=>(
+                    <div key={n} onClick={()=>{setWho(n);setOpen(false);}} style={{padding:'13px 14px',fontSize:14,cursor:'pointer',borderBottom:'1px solid #f5f0e6',color:'#3a2f20'}}
+                      onMouseEnter={e=>e.currentTarget.style.background='#faf7f1'}
+                      onMouseLeave={e=>e.currentTarget.style.background='#fff'}>
+                      {n}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {who && (
+              <button onClick={()=>setScreen('staff')}
+                style={{width:'100%',marginTop:12,padding:'13px',background:'#3a2f20',color:'#faf7f1',border:'none',fontFamily:SERIF,fontSize:13,letterSpacing:'0.1em',cursor:'pointer',transition:'background 0.2s'}}
+                onMouseEnter={e=>e.currentTarget.style.background='#5a4d3a'}
+                onMouseLeave={e=>e.currentTarget.style.background='#3a2f20'}>
+                Enter as {who} →
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div style={{textAlign:'center',marginTop:36,fontSize:10,color:'#bba98e',letterSpacing:'0.2em'}}>PORTO × TETE — SHIFT SYSTEM</div>
+      </div>
+
+      <style>{`
+        @keyframes fadeSlide { from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes slideUp   { from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+      `}</style>
+    </div>
+  );
+}
+
+function MenuCard({num,icon,title,sub,accent,onClick}){
+  const [hov,setHov]=useState(false);
+  return(
+    <div onClick={onClick} onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
+      style={{background:'#fff',borderRadius:2,padding:22,border:'1px solid #e8dfca',boxShadow:hov?'0 6px 20px rgba(58,47,32,0.08)':'0 1px 3px rgba(58,47,32,0.04)',cursor:'pointer',transition:'all 0.25s',transform:hov?'translateY(-2px)':'none'}}>
+      <div style={{display:'flex',alignItems:'flex-start',gap:14}}>
+        <div style={{fontFamily:SERIF,fontSize:22,color:hov?accent:'#bba98e',fontStyle:'italic',lineHeight:1,marginTop:2,transition:'color 0.25s'}}>{num}</div>
+        <div style={{flex:1}}>
+          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:3}}>
+            <span style={{fontSize:20}}>{icon}</span>
+            <div style={{fontFamily:SERIF,fontSize:16,fontWeight:500,color:'#3a2f20'}}>{title}</div>
+          </div>
+          <div style={{fontSize:12,color:'#a89a85',letterSpacing:'0.02em'}}>{sub}</div>
+        </div>
+        <div style={{color:hov?accent:'#d9c8a9',fontSize:16,transition:'all 0.25s',transform:hov?'translateX(3px)':'none'}}>→</div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════
+// HEADER COMPONENT (共通)
+// ══════════════════════════════════════════════
+function Header({title,sub,st,setSt,y,m,setY,setM,back,rightSlot,tabs}){
+  const store = st && STORES[st];
+  return (
+    <div style={{background:'#faf7f1',borderBottom:'1px solid #e8dfca',position:'sticky',top:0,zIndex:100}}>
+      <div style={{maxWidth:1400,margin:'0 auto',padding:'14px 18px',display:'flex',alignItems:'center',gap:14,flexWrap:'wrap',justifyContent:'space-between'}}>
+        <div>
+          <div style={{fontFamily:SERIF,fontSize:20,color:store?.deep||'#3a2f20',letterSpacing:'0.01em',lineHeight:1,marginBottom:3}}>
+            {store?.label||title}
+          </div>
+          <div style={{fontSize:10,letterSpacing:'0.2em',color:'#a89a85'}}>{sub}</div>
+        </div>
+
+        {setSt && (
+          <div style={{display:'flex',gap:4,background:'#fff',padding:3,border:'1px solid #e8dfca'}}>
+            {Object.entries(STORES).map(([k,s])=>(
+              <button key={k} onClick={()=>setSt(k)}
+                style={{padding:'5px 16px',border:'none',background:st===k?s.deep:'transparent',color:st===k?'#faf7f1':'#a89a85',fontFamily:SERIF,fontSize:12,letterSpacing:'0.08em',cursor:'pointer',transition:'all 0.2s'}}>
+                {s.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {tabs}
+
+        {setY && setM && (
+          <div style={{display:'flex',alignItems:'center',gap:10,background:'#fff',padding:'5px 10px',border:'1px solid #e8dfca'}}>
+            <button onClick={()=>{if(m===1){setM(12);setY(p=>p-1);}else setM(p=>p-1);}} style={{width:22,height:22,border:'none',background:'transparent',cursor:'pointer',fontSize:14,color:'#9d7c52'}}>‹</button>
+            <div style={{textAlign:'center',minWidth:92}}>
+              <div style={{fontFamily:SERIF,fontSize:13,color:'#3a2f20',lineHeight:1}}>令和{y-2018}年 {m}月</div>
+              <div style={{fontSize:9,color:'#bba98e',letterSpacing:'0.1em',marginTop:1}}>{['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][m-1]}</div>
+            </div>
+            <button onClick={()=>{if(m===12){setM(1);setY(p=>p+1);}else setM(p=>p+1);}} style={{width:22,height:22,border:'none',background:'transparent',cursor:'pointer',fontSize:14,color:'#9d7c52'}}>›</button>
+          </div>
+        )}
+
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          {rightSlot}
+          {back && (
+            <button onClick={back} style={{padding:'6px 12px',border:'1px solid #e8dfca',background:'#fff',color:'#a89a85',fontSize:11,letterSpacing:'0.08em',cursor:'pointer',fontFamily:SERIF}}>← Back</button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════
+// ADMIN
+// ══════════════════════════════════════════════
+function Admin({shifts,reqs,getSD,saveShifts,saveReqs,back,adminPw,savePw}){
+  const [showPwDialog,setShowPwDialog]=useState(false);
+  const [st,setSt]=useState('porto');
+  const [y,setY]=useState(2026);
+  const [m,setM]=useState(5);
+  const [tab,setTab]=useState('shift');
+  const [modal,setModal]=useState(null);
+  const [es,setEs]=useState('');
+  const [et1,setEt1]=useState('');
+  const [et2,setEt2]=useState('');
+  const [saving,setSaving]=useState(false);
+
+  const store=STORES[st];
+  const days=dim(y,m);
+  const data=getSD(st,y,m);
+  const pending=Object.entries(reqs).filter(([,r])=>!r.approved&&!r.changeRequested);
+  const changed=Object.entries(reqs).filter(([,r])=>r.changeRequested);
+  const done=Object.entries(reqs).filter(([,r])=>r.approved);
+
+  const openModal=(name,day)=>{
+    const c=data[name]?.[day]||{};
+    setEs(c.s||'');setEt1(c.t?c.t.split('-')[0]:'');setEt2(c.t?(c.t.split('-')[1]||''):'');
+    setModal({name,day});
+  };
+  const saveCell=async()=>{
+    setSaving(true);
+    const t=(et1&&et2)?`${et1}-${et2}`:(et1||'');
+    const k=`${st}-${y}-${m}`;
+    const cur=shifts[k]||{};
+    const nameData={...(cur[modal.name]||{})};
+    if(!es) delete nameData[modal.day]; else nameData[modal.day]={s:es,t};
+    await saveShifts({...shifts,[k]:{...cur,[modal.name]:nameData}});
+    setSaving(false);setModal(null);
+  };
+  const approve=async(id)=>{
+    const req=reqs[id];if(!req)return;
+    const k=`${req.store}-${y}-${m}`;
+    const cur=shifts[k]||{};
+    const nameData={...(cur[req.name]||{})};
+    nameData[req.day]={s:req.s,t:req.t||''};
+    await saveShifts({...shifts,[k]:{...cur,[req.name]:nameData}});
+    await saveReqs({...reqs,[id]:{...req,approved:true}});
+  };
+  const reqChange=async(id,memo)=>{
+    await saveReqs({...reqs,[id]:{...reqs[id],changeRequested:true,changeMemo:memo}});
+  };
+
+  const tabsEl = (
+    <div style={{display:'flex',gap:4,background:'#fff',padding:3,border:'1px solid #e8dfca'}}>
+      <button onClick={()=>setTab('shift')} style={{padding:'5px 14px',border:'none',background:tab==='shift'?store.deep:'transparent',color:tab==='shift'?'#faf7f1':'#a89a85',fontFamily:SERIF,fontSize:12,letterSpacing:'0.05em',cursor:'pointer'}}>シフト表</button>
+      <button onClick={()=>setTab('req')} style={{padding:'5px 14px',border:'none',background:tab==='req'?store.deep:'transparent',color:tab==='req'?'#faf7f1':'#a89a85',fontFamily:SERIF,fontSize:12,letterSpacing:'0.05em',cursor:'pointer',position:'relative'}}>
+        申請一覧
+        {pending.length>0&&<span style={{position:'absolute',top:-4,right:-4,background:'#c0392b',color:'#fff',borderRadius:'50%',width:15,height:15,fontSize:9,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700}}>{pending.length}</span>}
+      </button>
+    </div>
+  );
+
+  const rightEl = <>
+    <span style={{fontSize:10,color:saving?store.accent:'#bba98e',letterSpacing:'0.1em'}}>{saving?'SAVING...':'✓ SAVED'}</span>
+    <button onClick={()=>setShowPwDialog(true)} title="パスワード変更" style={{padding:'6px 10px',border:'1px solid #e8dfca',background:'#fff',color:'#a89a85',fontSize:11,cursor:'pointer',fontFamily:SERIF}}>⚙</button>
+  </>;
+
+  return(
+    <div style={{background:'#faf7f1',fontFamily:BODY,minHeight:'100vh',overflowX:'hidden'}}>
+      <Header sub="MANAGER · 管理者" st={st} setSt={setSt} y={y} m={m} setY={setY} setM={setM} back={back} tabs={tabsEl} rightSlot={rightEl}/>
+
+      <div style={{maxWidth:1400,margin:'0 auto',padding:'16px 12px',overflowX:'auto',WebkitOverflowScrolling:'touch'}}>
+        {tab==='shift'&&<ShiftTable store={store} y={y} m={m} data={data} days={days} pending={pending} otherStore={Object.keys(STORES).find(k=>k!==st)} getSD={getSD} onClick={openModal}/>}
+        {tab==='req'&&<RequestList pending={pending} changed={changed} done={done} m={m} y={y} onApprove={approve} onChange={reqChange}/>}
+      </div>
+
+      {modal&&<EditModal store={store} modal={modal} y={y} m={m} es={es} setEs={setEs} et1={et1} setEt1={setEt1} et2={et2} setEt2={setEt2} onSave={saveCell} onClose={()=>setModal(null)}/>}
+      {showPwDialog&&<PasswordDialog currentPw={adminPw} onSave={savePw} onClose={()=>setShowPwDialog(false)} storeDeep={store.deep}/>}
+    </div>
+  );
+}
+
+function PasswordDialog({currentPw,onSave,onClose,storeDeep}){
+  const [cur,setCur]=useState('');
+  const [ne,setNe]=useState('');
+  const [ne2,setNe2]=useState('');
+  const [err,setErr]=useState('');
+  const [done,setDone]=useState(false);
+
+  const submit=()=>{
+    if(cur!==currentPw){setErr('現在のパスワードが違います');return;}
+    if(ne.length<4){setErr('新しいパスワードは4文字以上にしてください');return;}
+    if(ne!==ne2){setErr('新しいパスワードが一致しません');return;}
+    onSave(ne);
+    setDone(true);
+    setTimeout(()=>{onClose();},1200);
+  };
+
+  return (
+    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(58,47,32,0.55)',zIndex:250,display:'flex',alignItems:'center',justifyContent:'center',padding:16,backdropFilter:'blur(4px)'}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:'#faf7f1',padding:28,width:340,maxWidth:'100%',border:'1px solid #e8dfca'}}>
+        <div style={{fontSize:10,letterSpacing:'0.2em',color:'#bba98e',marginBottom:8}}>SECURITY</div>
+        <div style={{fontFamily:SERIF,fontSize:22,color:'#3a2f20',marginBottom:4}}>パスワード変更</div>
+        <div style={{fontSize:12,color:'#a89a85',marginBottom:20,letterSpacing:'0.02em'}}>管理者アクセスのパスワードを変更します</div>
+
+        {done?(
+          <div style={{padding:'20px 0',textAlign:'center',color:'#3d6b5e',fontFamily:SERIF,fontSize:16,letterSpacing:'0.05em'}}>✓ 変更しました</div>
+        ):(
+          <>
+            <div style={{marginBottom:10}}>
+              <div style={{fontSize:10,letterSpacing:'0.1em',color:'#a89a85',marginBottom:5}}>現在のパスワード</div>
+              <input type="password" value={cur} onChange={e=>setCur(e.target.value)} style={{width:'100%',padding:'10px 12px',border:'1px solid #e8dfca',fontSize:13,fontFamily:'inherit',outline:'none',background:'#fff',color:'#3a2f20',boxSizing:'border-box'}}/>
+            </div>
+            <div style={{marginBottom:10}}>
+              <div style={{fontSize:10,letterSpacing:'0.1em',color:'#a89a85',marginBottom:5}}>新しいパスワード</div>
+              <input type="password" value={ne} onChange={e=>setNe(e.target.value)} style={{width:'100%',padding:'10px 12px',border:'1px solid #e8dfca',fontSize:13,fontFamily:'inherit',outline:'none',background:'#fff',color:'#3a2f20',boxSizing:'border-box'}}/>
+            </div>
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:10,letterSpacing:'0.1em',color:'#a89a85',marginBottom:5}}>新しいパスワード（確認）</div>
+              <input type="password" value={ne2} onChange={e=>setNe2(e.target.value)} style={{width:'100%',padding:'10px 12px',border:'1px solid #e8dfca',fontSize:13,fontFamily:'inherit',outline:'none',background:'#fff',color:'#3a2f20',boxSizing:'border-box'}}/>
+            </div>
+            {err&&<div style={{fontSize:11,color:'#c0392b',marginBottom:12,letterSpacing:'0.03em'}}>{err}</div>}
+            <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+              <button onClick={onClose} style={{padding:'9px 16px',border:'1px solid #e8dfca',background:'#fff',color:'#a89a85',fontSize:12,letterSpacing:'0.05em',cursor:'pointer',fontFamily:SERIF}}>Cancel</button>
+              <button onClick={submit} style={{padding:'9px 22px',border:'none',background:storeDeep,color:'#faf7f1',fontSize:12,letterSpacing:'0.1em',cursor:'pointer',fontFamily:SERIF}}>Update</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EditModal({store,modal,y,m,es,setEs,et1,setEt1,et2,setEt2,onSave,onClose}){
+  return (
+    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(58,47,32,0.55)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center',padding:16,backdropFilter:'blur(4px)'}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:'#faf7f1',padding:28,width:330,maxWidth:'100%',border:'1px solid #e8dfca',boxShadow:'0 20px 60px rgba(58,47,32,0.25)',animation:'slideUp 0.25s ease'}}>
+        <div style={{fontSize:10,letterSpacing:'0.2em',color:'#bba98e',marginBottom:8}}>{store.label.toUpperCase()} · EDIT</div>
+        <div style={{fontFamily:SERIF,fontSize:22,color:'#3a2f20',marginBottom:3}}>{modal.name}</div>
+        <div style={{fontSize:12,color:'#a89a85',marginBottom:20,letterSpacing:'0.02em'}}>{m}月{modal.day}日（{WEEK[dow(y,m,modal.day)]}曜日）</div>
+
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:16}}>
+          {[
+            {k:'work',m:'○',l:'出勤',c:'#3d6b5e',bg:'#e8f2ef'},
+            {k:'off', m:'×',l:'休み',c:'#c0392b',bg:'#fdecea'},
+            {k:'',   m:'—',l:'未定',c:'#a89a85',bg:'#f5f0e6'}
+          ].map(o=>(
+            <button key={o.k} onClick={()=>setEs(o.k)} style={{padding:'14px 4px',borderRadius:0,border:`1px solid ${es===o.k?o.c:'#e8dfca'}`,background:es===o.k?o.bg:'#fff',cursor:'pointer',textAlign:'center',transition:'all 0.15s'}}>
+              <div style={{fontSize:22,color:es===o.k?o.c:'#d9c8a9',lineHeight:1,marginBottom:4,fontFamily:SERIF}}>{o.m}</div>
+              <div style={{fontSize:11,color:es===o.k?o.c:'#a89a85',letterSpacing:'0.05em'}}>{o.l}</div>
+            </button>
+          ))}
+        </div>
+
+        {es==='work'&&(
+          <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:18}}>
+            <input value={et1} onChange={e=>setEt1(e.target.value)} placeholder="開始 9:00" style={{flex:1,padding:'10px 12px',border:'1px solid #e8dfca',borderRadius:0,fontSize:13,fontFamily:'inherit',outline:'none',background:'#fff',color:'#3a2f20'}}/>
+            <span style={{color:'#bba98e',fontSize:12}}>—</span>
+            <input value={et2} onChange={e=>setEt2(e.target.value)} placeholder="終了 18:00" style={{flex:1,padding:'10px 12px',border:'1px solid #e8dfca',borderRadius:0,fontSize:13,fontFamily:'inherit',outline:'none',background:'#fff',color:'#3a2f20'}}/>
+          </div>
+        )}
+
+        <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+          <button onClick={onClose} style={{padding:'9px 18px',border:'1px solid #e8dfca',background:'#fff',color:'#a89a85',fontSize:12,letterSpacing:'0.08em',cursor:'pointer',fontFamily:SERIF}}>Cancel</button>
+          <button onClick={onSave} style={{padding:'9px 22px',border:'none',background:store.deep,color:'#faf7f1',fontSize:12,letterSpacing:'0.1em',cursor:'pointer',fontFamily:SERIF}}>Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ShiftTable({store,y,m,data,days,pending,otherStore,getSD,onClick}){
+  const otherData = otherStore ? getSD(otherStore,y,m) : null;
+  return (
+    <div style={{background:'#fff',border:'1px solid #e8dfca',overflow:'auto',WebkitOverflowScrolling:'touch',maxWidth:'100vw'}}>
+      <table style={{width:'100%',borderCollapse:'collapse',minWidth:760}}>
+        <thead>
+          <tr>
+            <th style={{background:store.deep,color:'#faf7f1',padding:'8px 10px',fontSize:11,letterSpacing:'0.05em',width:76,minWidth:76,position:'sticky',left:0,zIndex:10,textAlign:'left',fontWeight:500,fontFamily:SERIF}}>氏名 / NAME</th>
+            {Array.from({length:days},(_,i)=>i+1).map(d=>(
+              <th key={d} style={{background:isSun(y,m,d)?'#9b4545':isSat(y,m,d)?'#3d5a7a':store.deep,color:'#faf7f1',padding:'4px 2px',width:32,minWidth:32}}>
+                <div style={{fontSize:13,fontWeight:500,fontFamily:SERIF}}>{d}</div>
+                <div style={{fontSize:8,opacity:0.6,letterSpacing:'0.05em'}}>{WEEK[dow(y,m,d)]}</div>
+              </th>
+            ))}
+            <th style={{background:store.deep,color:'#faf7f1',fontSize:9,width:40,padding:4,letterSpacing:'0.1em',fontFamily:SERIF}}>DAYS</th>
+          </tr>
+        </thead>
+        <tbody>
+          {store.staff.map((name,ri)=>{
+            let wk=0;
+            const rb=ri%2===0?'#fff':'#faf7f1';
+            const mp=pending.filter(([,r])=>r.name===name&&r.store===Object.entries(STORES).find(([k,s])=>s===store)?.[0]);
+            return(
+              <tr key={name}>
+                <td style={{background:rb,padding:'8px 10px',fontSize:12,fontWeight:500,position:'sticky',left:0,zIndex:5,borderRight:'1px solid #e8dfca',whiteSpace:'nowrap',color:'#3a2f20'}}>
+                  {name}
+                  {mp.length>0&&<span style={{marginLeft:6,fontSize:9,background:'#c0392b',color:'#fff',borderRadius:10,padding:'1px 6px',fontFamily:SERIF,letterSpacing:'0.05em'}}>{mp.length}</span>}
+                </td>
+                {Array.from({length:days},(_,i)=>i+1).map(d=>{
+                  const cell=data[name]?.[d];
+                  const hp=pending.some(([,r])=>r.name===name&&r.day===d);
+                  if(cell?.s==='work') wk++;
+                  let bg = rb;
+                  if(cell?.s==='work') bg = '#e8f2ef';
+                  else if(cell?.s==='off') bg = '#fdecea';
+                  else if(isSun(y,m,d)) bg = '#faeee5';
+                  else if(isSat(y,m,d)) bg = '#e8eef7';
+                  const hasOther = otherData && otherData[name]?.[d]?.s==='work' && cell?.s==='work';
+                  return(
+                    <td key={d} onClick={()=>onClick(name,d)}
+                      style={{background:bg,padding:1,height:44,verticalAlign:'middle',border:'1px solid #f0e8d4',cursor:'pointer',outline:hp?'2px solid #c0392b':'none',outlineOffset:'-2px',position:'relative',transition:'filter 0.15s'}}
+                      onMouseEnter={e=>e.currentTarget.style.filter='brightness(0.94)'}
+                      onMouseLeave={e=>e.currentTarget.style.filter=''}>
+                      <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',height:'100%'}}>
+                        {cell?.s==='work'&&<>
+                          <span style={{fontSize:14,color:'#3d6b5e',lineHeight:1,fontFamily:SERIF}}>○</span>
+                          {cell.t&&<span style={{fontSize:7,color:'#6b8075',marginTop:1}}>{cell.t}</span>}
+                          {hasOther&&<span style={{fontSize:6,background:STORES[otherStore].al,color:STORES[otherStore].accent,padding:'0 3px',marginTop:1,letterSpacing:'0.05em'}}>{STORES[otherStore].label}</span>}
+                        </>}
+                        {cell?.s==='off'&&<span style={{fontSize:14,color:'#c0392b',fontFamily:SERIF}}>×</span>}
+                        {!cell&&<span style={{color:'#d9c8a9',fontSize:11}}>·</span>}
+                        {hp&&<span style={{position:'absolute',top:2,right:2,width:5,height:5,background:'#c0392b',borderRadius:'50%'}}/>}
+                      </div>
+                    </td>
+                  );
+                })}
+                <td style={{fontWeight:500,fontSize:14,color:store.accent,background:'#faf7f1',textAlign:'center',border:'1px solid #f0e8d4',fontFamily:SERIF}}>{wk||'—'}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function RequestList({pending,changed,done,m,y,onApprove,onChange}){
+  if(pending.length===0&&changed.length===0&&done.length===0){
+    return <div style={{background:'#fff',border:'1px solid #e8dfca',padding:60,textAlign:'center',color:'#bba98e'}}>
+      <div style={{fontFamily:SERIF,fontStyle:'italic',fontSize:20,marginBottom:6,color:'#d9c8a9'}}>No requests yet</div>
+      <div style={{fontSize:12,letterSpacing:'0.05em'}}>申請はまだありません</div>
+    </div>;
+  }
+  return (
+    <div>
+      {pending.length>0&&<Section title="Pending" sub={`未承認 ${pending.length}件`} color="#c0392b">
+        {pending.map(([id,r])=><ReqCard key={id} r={r} m={m} y={y} onApprove={()=>onApprove(id)} onChange={memo=>onChange(id,memo)}/>)}
+      </Section>}
+      {changed.length>0&&<Section title="Change Requested" sub={`変更依頼済み ${changed.length}件`} color="#c9953a">
+        {changed.map(([id,r])=><ReqCard key={id} r={r} m={m} y={y} onApprove={()=>onApprove(id)} onChange={memo=>onChange(id,memo)}/>)}
+      </Section>}
+      {done.length>0&&<Section title="Approved" sub={`承認済み ${done.length}件`} color="#3d6b5e">
+        {done.map(([id,r])=>(
+          <div key={id} style={{background:'#fff',border:'1px solid #e8dfca',borderLeft:'3px solid #3d6b5e',padding:'12px 16px',display:'flex',gap:12,alignItems:'center',flexWrap:'wrap',marginBottom:6,opacity:0.75}}>
+            <span style={{fontSize:13,fontWeight:500,color:'#3a2f20'}}>{r.name}</span>
+            <span style={{fontSize:10,background:STORES[r.store].al,color:STORES[r.store].accent,padding:'2px 8px',letterSpacing:'0.05em',fontFamily:SERIF}}>{STORES[r.store].label}</span>
+            <span style={{fontSize:12,color:'#a89a85'}}>{m}月{r.day}日</span>
+            <span style={{fontSize:14,color:r.s==='work'?'#3d6b5e':'#c0392b',fontFamily:SERIF}}>{r.s==='work'?'○':'×'}</span>
+            <span style={{fontSize:10,color:'#bba98e',marginLeft:'auto',letterSpacing:'0.1em'}}>✓ REFLECTED</span>
+          </div>
+        ))}
+      </Section>}
+    </div>
+  );
+}
+
+function Section({title,sub,color,children}){
+  return (
+    <div style={{marginBottom:28}}>
+      <div style={{display:'flex',alignItems:'baseline',gap:12,marginBottom:12,paddingBottom:8,borderBottom:`1px solid ${color}22`}}>
+        <div style={{fontFamily:SERIF,fontSize:18,color,letterSpacing:'0.02em'}}>{title}</div>
+        <div style={{fontSize:11,color:'#a89a85'}}>{sub}</div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function ReqCard({r,m,y,onApprove,onChange}){
+  const [show,setShow]=useState(false);
+  const [memo,setMemo]=useState('');
+  const store=STORES[r.store];
+  const isChange = r.changeRequested;
+  return(
+    <div style={{background:'#fff',border:'1px solid #e8dfca',borderLeft:`3px solid ${isChange?'#c9953a':'#c0392b'}`,padding:'14px 18px',marginBottom:10}}>
+      <div style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap',marginBottom:show||(isChange&&r.changeMemo)?10:0}}>
+        <span style={{fontSize:15,fontWeight:500,color:'#3a2f20'}}>{r.name}</span>
+        <span style={{fontSize:10,background:store.al,color:store.accent,padding:'2px 8px',letterSpacing:'0.05em',fontFamily:SERIF}}>{store.label}</span>
+        <span style={{fontSize:13,color:'#5a4d3a'}}>{m}月{r.day}日（{WEEK[dow(y,m,r.day)]}）</span>
+        <span style={{fontSize:15,color:r.s==='work'?'#3d6b5e':'#c0392b',fontFamily:SERIF}}>{r.s==='work'?'○ 出勤':'× 休み'}</span>
+        {r.t&&<span style={{fontSize:11,color:'#a89a85'}}>{r.t}</span>}
+        {isChange&&<span style={{marginLeft:'auto',fontSize:10,background:'#fcf0dc',color:'#c9953a',padding:'2px 10px',letterSpacing:'0.05em',fontFamily:SERIF}}>CHANGE REQUESTED</span>}
+        {!isChange&&<span style={{fontSize:10,color:'#bba98e',marginLeft:'auto',letterSpacing:'0.05em'}}>{r.ts}</span>}
+      </div>
+      {isChange&&r.changeMemo&&<div style={{fontSize:12,color:'#7a6010',background:'#fcf0dc',border:'1px solid #f0d9a0',padding:'8px 12px',marginBottom:8,fontFamily:'inherit'}}>💬 {r.changeMemo}</div>}
+      {show&&(
+        <textarea value={memo} onChange={e=>setMemo(e.target.value)} placeholder="変更をお願いする内容を入力してください"
+          style={{width:'100%',padding:'10px 12px',border:'1px solid #e8d9a8',fontSize:12,fontFamily:'inherit',resize:'vertical',minHeight:60,outline:'none',boxSizing:'border-box',background:'#fcf0dc',marginBottom:8}}/>
+      )}
+      <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+        {show?(<>
+          <button onClick={()=>setShow(false)} style={{padding:'7px 14px',border:'1px solid #e8dfca',background:'#fff',color:'#a89a85',fontSize:11,letterSpacing:'0.05em',cursor:'pointer',fontFamily:SERIF}}>Cancel</button>
+          <button onClick={()=>{onChange(memo);setShow(false);}} style={{padding:'7px 14px',border:'none',background:'#c9953a',color:'#fff',fontSize:11,letterSpacing:'0.08em',cursor:'pointer',fontFamily:SERIF}}>Send Change Request</button>
+        </>):(<>
+          <button onClick={()=>setShow(true)} style={{padding:'7px 14px',border:'1px solid #c9953a',background:'#fff',color:'#c9953a',fontSize:11,letterSpacing:'0.08em',cursor:'pointer',fontFamily:SERIF}}>変更依頼</button>
+          <button onClick={onApprove} style={{padding:'7px 18px',border:'none',background:'#3d6b5e',color:'#fff',fontSize:11,letterSpacing:'0.08em',cursor:'pointer',fontFamily:SERIF}}>Approve 承認</button>
+        </>)}
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════
+// VIEW (全員閲覧)
+// ══════════════════════════════════════════════
+function View({getSD,back}){
+  const [st,setSt]=useState('porto');
+  const [y,setY]=useState(2026);
+  const [m,setM]=useState(5);
+  const store=STORES[st];
+  const days=dim(y,m);
+  const data=getSD(st,y,m);
+  const otherStore=Object.keys(STORES).find(k=>k!==st);
+
+  return(
+    <div style={{background:'#faf7f1',fontFamily:BODY,minHeight:'100vh',overflowX:'hidden'}}>
+      <Header sub="VIEW · シフト確認" st={st} setSt={setSt} y={y} m={m} setY={setY} setM={setM} back={back}/>
+      <div style={{maxWidth:1400,margin:'0 auto',padding:'20px 18px'}}>
+        <ShiftTable store={store} y={y} m={m} data={data} days={days} pending={[]} otherStore={otherStore} getSD={getSD} onClick={()=>{}}/>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════
+// STAFF (カレンダー入力)
+// ══════════════════════════════════════════════
+function Staff({who,getSD,reqs,saveReqs,back}){
+  const myStores=Object.entries(STORES).filter(([,s])=>s.staff.includes(who));
+  const [cs,setCs]=useState(myStores[0]?.[0]||'porto');
+  const [y,setY]=useState(2026);
+  const [m,setM]=useState(5);
+  const [entries,setEntries]=useState({});
+  const [sent,setSent]=useState(false);
+  const [mode,setMode]=useState('off'); // off|work
+  const [timeDialog,setTimeDialog]=useState(null); // {day}
+  const [tStart,setTStart]=useState('9:00');
+  const [tEnd,setTEnd]=useState('18:00');
+
+  const store=STORES[cs];
+  const days=dim(y,m);
+  const conf=getSD(cs,y,m);
+  const cnt=Object.keys(entries).length;
+
+  const tapCell=(d)=>{
+    setSent(false);
+    const cur=entries[d];
+    if(mode==='off'){
+      setEntries(p=>{
+        if(cur?.s==='off'){const n={...p};delete n[d];return n;}
+        return {...p,[d]:{s:'off',t:''}};
+      });
+    } else {
+      // 出勤モード：時間ダイアログを開く
+      if(cur?.s==='work'){
+        // 2タップ目：削除
+        setEntries(p=>{const n={...p};delete n[d];return n;});
+      } else {
+        setTStart(cur?.t?.split('-')[0]||'9:00');
+        setTEnd(cur?.t?.split('-')[1]||'18:00');
+        setTimeDialog({day:d});
+      }
+    }
+  };
+
+  const saveTime=()=>{
+    const t = (tStart&&tEnd)?`${tStart}-${tEnd}`:tStart;
+    setEntries(p=>({...p,[timeDialog.day]:{s:'work',t}}));
+    setTimeDialog(null);
+  };
+
+  const submit=async()=>{
+    const nx={...reqs};
+    Object.entries(entries).forEach(([day,val])=>{
+      if(!val.s)return;
+      const id=`${who}-${day}-${cs}-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
+      nx[id]={name:who,day:+day,store:cs,s:val.s,t:val.t||'',ts:new Date().toLocaleString('ja-JP'),approved:false};
+    });
+    await saveReqs(nx);
+    setSent(true);setEntries({});
+  };
+
+  const firstDow = dow(y,m,1);
+  const cells = [];
+  for(let i=0;i<firstDow;i++) cells.push(null);
+  for(let d=1;d<=days;d++) cells.push(d);
+
+  return(
+    <div style={{minHeight:'100vh',background:'#faf7f1',fontFamily:BODY}}>
+      <Header sub={`${who} · 希望申請`} st={cs} setSt={myStores.length>1?(k=>{setCs(k);setEntries({});setSent(false);}):null} y={y} m={m} setY={setY} setM={setM} back={back}/>
+
+      <div style={{maxWidth:520,margin:'0 auto',padding:'18px 16px 120px'}}>
+
+        {/* モード切り替え */}
+        <div style={{background:'#fff',border:'1px solid #e8dfca',padding:14,marginBottom:18}}>
+          <div style={{fontSize:10,letterSpacing:'0.2em',color:'#bba98e',marginBottom:10,textAlign:'center'}}>SELECT MODE · 入力モード</div>
+          <div style={{display:'flex',gap:8}}>
+            <button onClick={()=>setMode('off')} style={{flex:1,padding:'14px 8px',border:`1px solid ${mode==='off'?'#c0392b':'#e8dfca'}`,background:mode==='off'?'#fdecea':'#fff',cursor:'pointer',transition:'all 0.15s'}}>
+              <div style={{fontSize:20,color:mode==='off'?'#c0392b':'#d9c8a9',fontFamily:SERIF,marginBottom:3}}>休</div>
+              <div style={{fontSize:11,color:mode==='off'?'#c0392b':'#a89a85',letterSpacing:'0.05em'}}>休み希望</div>
+            </button>
+            <button onClick={()=>setMode('work')} style={{flex:1,padding:'14px 8px',border:`1px solid ${mode==='work'?'#3d6b5e':'#e8dfca'}`,background:mode==='work'?'#e8f2ef':'#fff',cursor:'pointer',transition:'all 0.15s'}}>
+              <div style={{fontSize:20,color:mode==='work'?'#3d6b5e':'#d9c8a9',fontFamily:SERIF,marginBottom:3}}>○</div>
+              <div style={{fontSize:11,color:mode==='work'?'#3d6b5e':'#a89a85',letterSpacing:'0.05em'}}>時間指定出勤</div>
+            </button>
+          </div>
+        </div>
+
+        {/* カレンダー */}
+        <div style={{background:'#fff',border:'1px solid #e8dfca',padding:14}}>
+          {/* 曜日ヘッダー */}
+          <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:3,marginBottom:4}}>
+            {WEEK.map((w,i)=>(
+              <div key={w} style={{textAlign:'center',padding:'6px 0',fontSize:10,letterSpacing:'0.1em',color:i===0?'#9b4545':i===6?'#3d5a7a':'#a89a85',fontFamily:SERIF}}>{w}</div>
+            ))}
+          </div>
+
+          {/* 日付グリッド */}
+          <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:3}}>
+            {cells.map((d,i)=>{
+              if(d===null) return <div key={i} style={{aspectRatio:'1/1.1'}}/>;
+              const entry=entries[d];
+              const cfm=conf[who]?.[d];
+              const sun=isSun(y,m,d);
+              const sat=isSat(y,m,d);
+              let bg='#fff';
+              let borderColor='#f0e8d4';
+              if(entry?.s==='off'){bg='#fdecea';borderColor='#c0392b';}
+              else if(entry?.s==='work'){bg='#e8f2ef';borderColor='#3d6b5e';}
+              else if(sun) bg='#faeee5';
+              else if(sat) bg='#e8eef7';
+
+              return (
+                <div key={d} onClick={()=>tapCell(d)}
+                  style={{aspectRatio:'1/1.1',background:bg,border:`1px solid ${borderColor}`,borderRadius:0,padding:4,cursor:'pointer',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'space-between',transition:'all 0.12s',position:'relative'}}
+                  onMouseEnter={e=>e.currentTarget.style.filter='brightness(0.95)'}
+                  onMouseLeave={e=>e.currentTarget.style.filter=''}>
+                  <div style={{fontSize:13,fontFamily:SERIF,color:sun?'#9b4545':sat?'#3d5a7a':'#3a2f20',fontWeight:500,alignSelf:'flex-start'}}>{d}</div>
+
+                  <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:1}}>
+                    {entry?.s==='off'&&<div style={{fontSize:22,color:'#c0392b',fontFamily:SERIF,lineHeight:1,fontWeight:500}}>休</div>}
+                    {entry?.s==='work'&&<>
+                      <div style={{fontSize:18,color:'#3d6b5e',fontFamily:SERIF,lineHeight:1}}>○</div>
+                      {entry.t&&<div style={{fontSize:7,color:'#6b8075'}}>{entry.t}</div>}
+                    </>}
+                  </div>
+
+                  {cfm&&(
+                    <div style={{fontSize:8,color:'#a89a85',letterSpacing:'0.03em',alignSelf:'flex-end'}}>確定:{cfm.s==='work'?'○':'×'}</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* ヘルプ */}
+        <div style={{marginTop:14,padding:'10px 14px',background:'#fcf9f3',border:'1px solid #f0e8d4',fontSize:11,color:'#a89a85',lineHeight:1.7}}>
+          📅 上のモードを選んでから、カレンダーの日付をタップ<br/>
+          💡 出勤モードの場合は時間を選択できます<br/>
+          🔄 もう一度タップで取り消し
+        </div>
+
+      </div>
+
+      {/* 送信バー */}
+      <div style={{position:'fixed',bottom:0,left:0,right:0,background:'#faf7f1',borderTop:'1px solid #e8dfca',padding:'14px 16px',boxShadow:'0 -4px 20px rgba(58,47,32,0.08)'}}>
+        <div style={{maxWidth:520,margin:'0 auto',display:'flex',alignItems:'center',justifyContent:'space-between',gap:12}}>
+          {sent
+            ? <div style={{color:'#3d6b5e',fontFamily:SERIF,fontSize:14,letterSpacing:'0.05em'}}>✓ Submitted 送信しました</div>
+            : <div style={{fontSize:12,color:'#a89a85',letterSpacing:'0.02em'}}>{cnt>0?`${cnt} 日分を入力中`:'希望日をタップ'}</div>}
+          <button onClick={submit} disabled={cnt===0||sent}
+            style={{padding:'12px 24px',border:'none',background:cnt>0&&!sent?store.deep:'#d9c8a9',color:'#faf7f1',fontFamily:SERIF,fontSize:13,letterSpacing:'0.1em',cursor:cnt>0&&!sent?'pointer':'default',transition:'all 0.2s'}}>
+            申請する　{cnt>0?`(${cnt})`:''}
+          </button>
+        </div>
+      </div>
+
+      {/* 時間入力ダイアログ - タップ選択式 */}
+      {timeDialog&&(
+        <div onClick={()=>setTimeDialog(null)} style={{position:'fixed',inset:0,background:'rgba(58,47,32,0.55)',zIndex:300,display:'flex',alignItems:'flex-end',justifyContent:'center',backdropFilter:'blur(4px)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:'#faf7f1',padding:20,width:'100%',maxWidth:480,border:'1px solid #e8dfca',maxHeight:'90vh',overflowY:'auto',borderTopLeftRadius:12,borderTopRightRadius:12}}>
+            <div style={{fontSize:10,letterSpacing:'0.2em',color:'#bba98e',marginBottom:6,textAlign:'center'}}>TIME</div>
+            <div style={{fontFamily:SERIF,fontSize:20,color:'#3a2f20',marginBottom:2,textAlign:'center'}}>{m}月{timeDialog.day}日</div>
+            <div style={{fontSize:12,color:'#a89a85',marginBottom:16,textAlign:'center'}}>時間をタップして選択</div>
+
+            {/* 現在の選択表示 */}
+            <div style={{background:'#fff',border:'1px solid #e8dfca',padding:'14px',marginBottom:16,textAlign:'center',display:'flex',alignItems:'center',justifyContent:'center',gap:14}}>
+              <div>
+                <div style={{fontSize:9,letterSpacing:'0.15em',color:'#bba98e',marginBottom:2}}>START</div>
+                <div style={{fontFamily:SERIF,fontSize:22,color:'#3a2f20'}}>{tStart||'—'}</div>
+              </div>
+              <div style={{color:'#bba98e',fontSize:16}}>〜</div>
+              <div>
+                <div style={{fontSize:9,letterSpacing:'0.15em',color:'#bba98e',marginBottom:2}}>END</div>
+                <div style={{fontFamily:SERIF,fontSize:22,color:'#3a2f20'}}>{tEnd||'—'}</div>
+              </div>
+            </div>
+
+            {/* 開始時間 */}
+            <div style={{fontSize:11,letterSpacing:'0.1em',color:'#a89a85',marginBottom:6}}>開始時間</div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(6,1fr)',gap:4,marginBottom:14}}>
+              {['8:00','8:30','9:00','9:30','10:00','10:30','11:00','11:30','12:00','13:00','14:00','14:30','15:00','16:00','17:00','18:00'].map(t=>(
+                <button key={t} onClick={()=>setTStart(t)}
+                  style={{padding:'10px 4px',border:`1px solid ${tStart===t?'#3d6b5e':'#e8dfca'}`,background:tStart===t?'#e8f2ef':'#fff',color:tStart===t?'#3d6b5e':'#5a4d3a',fontFamily:SERIF,fontSize:12,cursor:'pointer',transition:'all 0.12s',fontWeight:tStart===t?600:400}}>
+                  {t}
+                </button>
+              ))}
+            </div>
+
+            {/* 終了時間 */}
+            <div style={{fontSize:11,letterSpacing:'0.1em',color:'#a89a85',marginBottom:6}}>終了時間</div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(6,1fr)',gap:4,marginBottom:18}}>
+              {['13:00','13:30','14:00','14:30','15:00','15:30','16:00','16:30','17:00','17:30','18:00','18:30','19:00'].map(t=>(
+                <button key={t} onClick={()=>setTEnd(t)}
+                  style={{padding:'10px 4px',border:`1px solid ${tEnd===t?'#3d6b5e':'#e8dfca'}`,background:tEnd===t?'#e8f2ef':'#fff',color:tEnd===t?'#3d6b5e':'#5a4d3a',fontFamily:SERIF,fontSize:12,cursor:'pointer',transition:'all 0.12s',fontWeight:tEnd===t?600:400}}>
+                  {t}
+                </button>
+              ))}
+            </div>
+
+            <div style={{display:'flex',gap:8}}>
+              <button onClick={()=>setTimeDialog(null)} style={{flex:1,padding:'14px',border:'1px solid #e8dfca',background:'#fff',color:'#a89a85',fontSize:13,fontFamily:SERIF,letterSpacing:'0.05em',cursor:'pointer'}}>Cancel</button>
+              <button onClick={saveTime} style={{flex:2,padding:'14px',border:'none',background:store.deep,color:'#faf7f1',fontSize:13,fontFamily:SERIF,letterSpacing:'0.15em',cursor:'pointer'}}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+</script>
+</body>
+</html>
